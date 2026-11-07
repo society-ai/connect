@@ -1,0 +1,3 @@
+# Contributor and CI tools only (./connect dev check, the registry build). Never installed on users' machines.
+pyyaml>=6.0,<7
+jsonschema>=4.20,<5

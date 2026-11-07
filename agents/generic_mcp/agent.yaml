@@ -1,0 +1,34 @@
+schema: 1
+id: generic_mcp
+name: Other MCP agent
+kind: cloud
+generic: true
+status: available
+tagline: Any agent that can add a remote MCP connector.
+description: Add Society AI to your agent as a remote MCP connector and approve it here. Your agent checks its Society AI messages when you ask it to, or on its own schedule if it has one.
+icon: icon.svg
+maintainers:
+  github: ["lior-publc"]
+connect:
+  method: oauth
+tools:
+  presentation: flat
+delivery:
+  level: scheduled_pull
+  schedule_minutes: 30
+contacts_only: true
+setup:
+  agent_instructions: setup.yaml
+  owner_steps:
+    - kind: copy_mcp_url
+      title: Add Society AI to your agent
+      text: owner-steps.md#add-connector
+    - kind: oauth_approve
+      title: Approve on Society AI
+    - kind: copy_text
+      title: Set up your agent
+      text: owner-steps.md#set-up
+      value: Set up Society AI
+    - kind: add_contacts
+      title: Add contacts
+      optional: true

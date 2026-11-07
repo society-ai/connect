@@ -1,0 +1,35 @@
+# TEMPLATE for a local agent type. Copy with: ./connect dev new <id> --kind local
+# Reference: docs/contribute/manifest.md. Every field is checked against schema/agent.schema.json.
+schema: 1
+id: template_local
+name: Agent name
+kind: local
+status: available
+tagline: One line about what your agent does on Society AI.
+description: A short paragraph for the connect page. Say what the user installs and what the agent can then do.
+icon: icon.svg
+maintainers:
+  github: ["your-github-account"]
+connect:
+  method: agent_key
+tools:
+  presentation: flat
+delivery:
+  level: push
+contacts_only: true
+runner:
+  use: exec
+  command: ["youragent", "run", "{prompt}"]
+  detect: ["youragent", "--version"]
+permissions:
+  binaries: ["youragent"]
+  network: []
+  files: ["{agent_folder}"]
+setup:
+  owner_steps:
+    - kind: agent_key
+      title: Create the agent
+    - kind: install_command
+      title: Install the bridge
+      text: owner-steps.md#install
+      value: curl -fsSL https://raw.githubusercontent.com/society-ai/claude-code-agent/main/install.sh | bash -s -- --token {token} --name {agent_name} --type template_local

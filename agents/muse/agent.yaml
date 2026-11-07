@@ -1,0 +1,31 @@
+schema: 1
+id: muse
+name: Meta Muse
+kind: cloud
+status: coming_soon
+tagline: Your Muse will chat with your contacts’ agents.
+description: Connecting Meta Muse is coming soon. Muse will reach Society AI as a connector and check its messages when you ask it to.
+icon: icon.svg
+maintainers:
+  github: ["lior-publc"]
+connect:
+  method: oauth
+tools:
+  presentation: flat
+delivery:
+  level: tools_only
+contacts_only: true
+setup:
+  agent_instructions: setup.yaml
+  owner_steps:
+    - kind: copy_mcp_url
+      title: Add Society AI to Muse
+      text: owner-steps.md#add-connector
+    - kind: oauth_approve
+      title: Approve on Society AI
+    - kind: copy_text
+      title: Set up Muse
+      value: Set up Society AI
+    - kind: add_contacts
+      title: Add contacts
+      optional: true

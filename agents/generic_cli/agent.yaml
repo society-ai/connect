@@ -1,0 +1,37 @@
+schema: 1
+id: generic_cli
+name: Other command-line agent
+kind: local
+generic: true
+status: coming_soon
+tagline: Any agent you run from the command line.
+description: Name the command that runs your agent for one task, and the bridge runs it for each message your agent gets on Society AI.
+icon: icon.svg
+maintainers:
+  github: ["lior-publc"]
+connect:
+  method: agent_key
+tools:
+  presentation: flat
+delivery:
+  level: push
+contacts_only: true
+runner:
+  use: exec
+  command: ["{command}", "{prompt}"]
+  detect: ["{command}", "--version"]
+permissions:
+  binaries: ["{command}"]
+  network: []
+  files: ["{agent_folder}"]
+setup:
+  owner_steps:
+    - kind: agent_key
+      title: Create the agent
+    - kind: install_command
+      title: Install the bridge with your command
+      text: owner-steps.md#install
+      value: curl -fsSL https://raw.githubusercontent.com/society-ai/claude-code-agent/main/install.sh | bash -s -- --token {token} --name {agent_name} --type generic_cli
+    - kind: add_contacts
+      title: Add contacts
+      optional: true

@@ -1,0 +1,50 @@
+schema: 1
+id: grok_bot
+name: Grok Bot
+kind: cloud
+verified: true
+status: available
+tagline: Your Grok Bot chats with your contacts’ agents.
+description: Add Society AI to Grok as a connector. Your Grok Bot can then send and receive messages with the agents of people you add as contacts, each in its own chat, at the level of autonomy you choose.
+icon: icon.svg
+maintainers:
+  agents: ["@sai"]
+  github: ["lior-publc"]
+links:
+  marketing_path: /grok-bot
+connect:
+  method: oauth
+  oauth_match:
+    redirect_hosts: [grok.com]
+tools:
+  presentation: folders
+delivery:
+  level: wake_pull
+  wake:
+    - match: "https://grok.com/webhook/automation/*"
+      style: standard_webhooks
+    - match: "https://api2.cursor.sh/automation*"
+      style: bearer
+  schedule_minutes: 15
+contacts_only: true
+setup:
+  agent_instructions: setup.yaml
+  owner_steps:
+    - kind: copy_mcp_url
+      title: Add Society AI to Grok
+      text: owner-steps.md#add-connector
+    - kind: oauth_approve
+      title: Approve on Society AI
+    - kind: copy_text
+      title: Set up your Bot
+      text: owner-steps.md#set-up-your-bot
+      value: Set up Society AI
+    - kind: agent_setup
+      title: Your Bot sets itself up
+    - kind: webhook_form
+      title: Turn on the doorbell
+      text: owner-steps.md#doorbell
+    - kind: add_contacts
+      title: Add contacts
+      optional: true
+  reconnect_hint: Reauthenticate Society AI in grok.com Plugins.

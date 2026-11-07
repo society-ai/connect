@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Society AI Connect developer commands. Run from the repo root.
+
+    ./connect dev check [<type>]          what CI runs: manifests, setup text, core policy, unit tests
+    ./connect dev new <id> --kind cloud|local
+                                          start a new agent type from the template
+    ./connect registry build --version <v> [--out dist/registry.json]
+
+Needs the contributor tools: pip install -r requirements.txt -r requirements-dev.txt
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
+
+def _missing_tools() -> bool:
+    try:
+        import jsonschema  # noqa: F401
+        import yaml  # noqa: F401
+    except ImportError:
+        print("Install the contributor tools first: pip install -r requirements.txt -r requirements-dev.txt")
+        return True
+    return False
+
+
+def dev_check(args) -> int:
+    if _missing_tools():
+        return 2
+    from contacts import classify_sender
+    from kit.conformance import manifests, policy
+
+    problems = manifests.check(ROOT, args.type) + policy.check(classify_sender)
+    for p in problems:
+        print(f"FAIL {p}")
+    if problems:
+        print(f"\n{len(problems)} problem(s). Fix them and run ./connect dev check again.")
+        return 1
+    print("Agent types: OK")
+    if args.no_tests:
+        return 0
+    return subprocess.call([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"], cwd=ROOT)
+
+
+def dev_new(args) -> int:
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,39}", args.id):
+        print("The id is lowercase letters, digits and underscores, starting with a letter (e.g. codex).")
+        return 2
+    target = ROOT / "agents" / args.id
+    if target.exists():
+        print(f"agents/{args.id} already exists.")
+        return 2
+    shutil.copytree(ROOT / "agents" / f"_template_{args.kind}", target)
+    manifest = target / "agent.yaml"
+    text = manifest.read_text()
+    text = "\n".join(line for line in text.splitlines() if not line.startswith("# TEMPLATE")
+                     and not line.startswith("# Reference")) + "\n"
+    manifest.write_text(text.replace(f"id: template_{args.kind}", f"id: {args.id}")
+                        .replace(f"--type template_{args.kind}", f"--type {args.id}"))
+    print(f"Created agents/{args.id}. Next: edit agent.yaml and the other files there, then ./connect dev check {args.id}")
+    print("Guide: docs/contribute/adding-an-agent-type.md")
+    return 0
+
+
+def registry_build(args) -> int:
+    if _missing_tools():
+        return 2
+    from kit import registry
+    from kit.conformance import manifests
+
+    problems = manifests.check(ROOT)
+    if problems:
+        for p in problems:
+            print(f"FAIL {p}")
+        return 1
+    out = Path(args.out)
+    registry.write(registry.build(ROOT, version=args.version), out)
+    print(f"Wrote {out}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="connect", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="group", required=True)
+    dev = sub.add_parser("dev").add_subparsers(dest="command", required=True)
+    check = dev.add_parser("check")
+    check.add_argument("type", nargs="?")
+    check.add_argument("--no-tests", action="store_true")
+    check.set_defaults(run=dev_check)
+    new = dev.add_parser("new")
+    new.add_argument("id")
+    new.add_argument("--kind", choices=("cloud", "local"), required=True)
+    new.set_defaults(run=dev_new)
+    reg = sub.add_parser("registry").add_subparsers(dest="command", required=True)
+    build = reg.add_parser("build")
+    build.add_argument("--version", required=True)
+    build.add_argument("--out", default="dist/registry.json")
+    build.set_defaults(run=registry_build)
+    args = parser.parse_args()
+    return args.run(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

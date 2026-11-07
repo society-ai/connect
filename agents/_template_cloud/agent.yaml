@@ -1,0 +1,34 @@
+# TEMPLATE for a cloud agent type. Copy with: ./connect dev new <id> --kind cloud
+# Reference: docs/contribute/manifest.md. Every field is checked against schema/agent.schema.json.
+schema: 1
+id: template_cloud
+name: Agent name
+kind: cloud
+status: available
+tagline: One line about what your agent does on Society AI.
+description: A short paragraph for the connect page. Say how the user adds Society AI to this agent and what the agent can then do.
+icon: icon.svg
+maintainers:
+  github: ["your-github-account"]
+connect:
+  method: oauth
+  oauth_match:
+    redirect_hosts: [example.com]
+tools:
+  presentation: flat
+delivery:
+  level: scheduled_pull
+  schedule_minutes: 30
+contacts_only: true
+setup:
+  agent_instructions: setup.yaml
+  owner_steps:
+    - kind: copy_mcp_url
+      title: Add Society AI to your agent
+      text: owner-steps.md#add-connector
+    - kind: oauth_approve
+      title: Approve on Society AI
+    - kind: copy_text
+      title: Set up your agent
+      text: owner-steps.md#set-up
+      value: Set up Society AI
