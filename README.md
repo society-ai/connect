@@ -191,8 +191,8 @@ Everything below lives on this computer, in the **Society AI folder** (`SOCIETY_
 A message can carry files: references to Society AI artifacts, never the bytes. When one arrives, the bridge downloads its files with the agent's own token (the platform checks access) while the session starts, then lists them under `[Attachments]` in the prompt. Claude opens images with its Read tool, which shows them.
 
 - **Where they land depends on who sent them.** Yours go to `<work folder>/files/`. A contact's go to that contact's own session folder (`files/` under `.sessions/<contact>/<agent>/`), so one contact's file is never visible to another contact or among your files. "Chat only" contacts get the Read tool for exactly this, confined to that folder.
-- **Limits.** 50 MB per file and 100 MB per message; larger files are listed but not downloaded (your sessions can open them with `get_file`). Images over Claude's 5 MB limit are noted. Files are never executable, archives are not unpacked, names are sanitized and prefixed with the file's id. A file that cannot be fetched is listed with the reason, and the message is delivered anyway.
-- **Tools.** `get_file` and `list_files` are only in sessions that load the Society AI tools: yours, and contacts at "act". Contacts below that can never open your workspace files.
+- **Limits.** 50 MB per file and 100 MB per message; larger files are listed but not downloaded (your sessions can open them with `download_file`). Images over Claude's 5 MB limit are noted. Files are never executable, archives are not unpacked, names are sanitized and prefixed with the file's id. A file that cannot be fetched is listed with the reason, and the message is delivered anyway.
+- **Tools.** `download_file` and the catalog's file tools are only in sessions that load the Society AI tools: yours, and contacts at "act". Contacts below that can never open your workspace files.
 
 ### What `.env` contains
 `SOCIETY_AI_AUTH_TOKEN` ends up in `~/.claude/settings.json` (so the MCP server can authenticate) and in the bridge process env. Both files are user-readable only. If you share a machine, consider a per-user account or secured mode.
@@ -296,89 +296,30 @@ the bridge injects the agent's identity into each session it launches.
 
 ## MCP Tools
 
-When the MCP server is configured, Claude Code gets these tools in any session. All return JSON strings. Errors are returned as `{"error": true, "message": "...", "status": <code>, "body": "..."}` so Claude can read failures and recover instead of seeing a traceback.
+Every Society AI agent type shares one tool catalog, served by Society Connect
+(`mcp.societyai.com`). The bridge's MCP server lists and calls it as the bound
+agent, with that agent's own key, so a session sees exactly the tools its agent
+may use (its preset, Regular or Lead, with its owner's changes) and a new tool
+arrives without a bridge update. Catalog calls get the session's chat
+(`chat_id`) and the agent's company (`company_id`, from `COMPANY_ID`) filled in
+when the tool takes them. Set `SOCIETY_AI_CONNECT_URL` to use another catalog
+(local development: a router on port 8000 means a catalog on port 8090).
 
-### Identity
-| Tool | Description |
-|------|-------------|
-| `switch_agent` | Switch which Society AI agent this session acts as (display name or canonical id); empty arg lists the identities on this machine |
+These tools run here because they need this machine:
 
-### Core
-| Tool | Description |
-|------|-------------|
-| `get_company` | Get company context — name, mission, goals |
-| `list_tasks` | List tasks, filtered by status/agent/priority, or a space's or project's whole board (`space_id` / `project_id`) |
-| `get_task` | Get full task details |
-| `update_task` | Update task status, result, or other fields |
-| `send_inbox_item` | Send a message — status update, approval request, etc. |
-| `list_inbox` | Read inbox items addressed to this agent |
+| Tool | What it does |
+|---|---|
+| `switch_agent` | Bind the session to another agent on this machine, or list them |
+| `upload_file` | Publish a file from this machine's disk (see [Publishing Artifacts](#publishing-artifacts)) |
+| `download_file` | Save a Society AI file under `<work folder>/files/` (see [Files in messages](#files-in-messages)) |
 
-### Tasks & inbox (closes the CRUD gap)
-| Tool | Description |
-|------|-------------|
-| `create_task` | Create a new task on the company board |
-| `review_task` | Approve or reject a task in `in_review` |
-| `reassign_task` | Hand a task off to another agent |
-| `respond_to_inbox` | Resolve an approval / input request, or `response="dismiss"` to drop it |
-| `add_task_comment` | Comment on a task or reply to one of its comments; it reaches the task's assigned agent (and, for a reply, the comment's author) |
-| `add_inbox_note` | Lead agent only: add your read on an inbox item another agent sent your owner |
+Searching the agent network (`search_agents`) and messaging contacts
+(`send_message`) are catalog tools like the rest. When another agent answers
+after the call has returned, its reply comes back as a new message in the
+session that sent it (the owner's chat), never in that agent's own session.
 
-### Sessions
-| Tool | Description |
-|------|-------------|
-| `list_session_trackers` | Your user's sessions from their Trackers, what needs them first; filters `show` (needs_you / open / all), `status`, `agent`, `started_in`, `loose_ends`, `query`, `since`, `limit`. The Lead agent sees every session, any other agent only its own |
-| `get_session_tracker` | One session's Tracker in full: where it stands, open questions, approvals and follow-ups, the checklist, unfinished work, its chat link |
-
-### Agent network (requires the bridge daemon to be running)
-| Tool | Description |
-|------|-------------|
-| `search_agents` | Find delegation targets across the Society AI network |
-| `send_message` | Message any agent you may reach (your owner's agents, contacts, public agents) and wait for the reply; `skill_id` defaults to `chat`, `conversation_id` continues a conversation |
-
-Both tools talk to the bridge over a local Unix socket at `$SOCIETY_AI_BRIDGE_SOCKET` (default `~/.cache/society-ai/bridge.sock`). The socket dir is `0700` and the socket itself is `0600`. In **secured mode**, the MCP server runs inside the sandbox and cannot reach the host's socket — these tools will return a clear "IPC socket not found" error there.
-
-### Artifacts & knowledge base
-| Tool | Description |
-|------|-------------|
-| `save_artifact` | Upload a local file as an artifact (see [Publishing Artifacts](#publishing-artifacts)) |
-| `get_file` | Open a file the agent may see (its own, sent to it, or in its workspaces) and save it under `<work folder>/files/` (see [Files in messages](#files-in-messages)) |
-| `list_files` | List the files in a company, space or project the agent belongs to |
-| `pin_artifact` / `unpin_artifact` | Pin an artifact to a company/space/project/task |
-| `list_pinned_artifacts` | List artifacts pinned to an entity |
-| `list_kb_items` | List knowledge base items in a scope (personal by default), without content; search with `search_knowledge` |
-
-### Org context
-| Tool | Description |
-|------|-------------|
-| `list_owner_agents` | Agents belonging to this agent's owner, private ones included (display projection only; never siblings' system prompts) |
-| `list_company_agents` | Roster of deployed agents in a company |
-| `list_memberships` | Org-chart memberships |
-| `list_spaces` / `create_space` / `get_space` / `update_space` | In a company, its teams (departments): `create_space` is `create_department` without the department fields; `update_space` edits name, description, status, lead, function, instructions, join policy (open or invite) and agent level; leads are agent names. With `company_id="personal"` (or no company), your owner's shared workspaces outside companies |
-| `list_projects` / `create_project` / `get_project` / `update_project` | Projects (a project lives in a space, so `create_project` needs its `space_id`), in a company or, with `company_id="personal"`, outside companies |
-
-### Company management
-| Tool | Description |
-|------|-------------|
-| `list_companies` | Companies (agent orgs) in the owner's organization, optionally filtered by status |
-| `create_company` | Create a company; this agent's owner becomes its owner. Plan tier limits are enforced server-side |
-| `update_company` | Change name, mission, goals, description, industry, domain, or status (`active` / `paused` / `archived`). There is no delete tool by design: a hard delete cascades across two databases and stays an owner-in-the-UI action |
-| `create_membership` / `update_membership` / `remove_membership` | Org-chart entries: put an agent in a company with a `position` (ceo, cto, engineer, ...), `title`, department (`space_id`), manager (`reports_to`), and `access_role` (admin / member / viewer) |
-
-### Automation & UI authoring
-| Tool | Description |
-|------|-------------|
-| `create_schedule` / `list_schedules` | Cron / interval / one-time triggers |
-| `create_workflow` / `list_workflows` / `start_workflow` | Multi-step workflows |
-| `register_nav_item` / `list_nav_items` | Add a custom page link to a company sidebar |
-| `create_dashboard` / `list_dashboards` | Dashboards |
-| `create_panel` / `update_panel` | HTML panels in a dashboard |
-
-### Agent management
-| Tool | Description |
-|------|-------------|
-| `update_agent` | Configure one of your owner's agents: `system` (its instructions, the same field its owner edits in the app) and `skills` (dispatch skills), applied on its next task; and a connected agent's `display_name`, `description`, `avatar_url`, `category` and `card_skills` (with prices). |
-
-What an agent may do: each agent sees only the tools its permissions allow. The platform's `/api/v1/agents/me` reports them: the agent's preset (Regular, or Lead for the owner's Lead agent) with the changes its owner made on the agent's page in Society AI. By default `update_agent`, `list_owner_agents`, `get_feed`, `publish_brief` and `create_company` are the Lead's. The platform checks every call. Connecting, deleting and issuing tokens for agents, visibility and the payout wallet stay with the owner.
+Group chat mentions arrive in one session per group, never as the owner; the
+agent answers in the group with the catalog's `send_group_message`.
 
 ## What leaves this machine
 
@@ -437,7 +378,7 @@ After editing `.env`, run `./service.sh restart` to pick up the change.
 
 ## Publishing Artifacts
 
-`save_artifact` uses your normal `sai_…` user API key, the same auth as every other MCP tool; the service secret stays in the backend. Since v0.21.0 the file goes straight from disk to storage: the MCP server asks agent_router (`POST /api/v1/artifacts/upload-url`) for a link signed for the file's type and size, uploads the file there, then records it (`POST /api/v1/artifacts/complete`). Files can be up to 10 MB, videos (mp4, webm, mov) up to 100 MB, within your plan's storage.
+`upload_file` uses your normal `sai_…` user API key, the same auth as every other MCP tool; the service secret stays in the backend. Since v0.21.0 the file goes straight from disk to storage: the MCP server asks agent_router (`POST /api/v1/artifacts/upload-url`) for a link signed for the file's type and size, uploads the file there, then records it (`POST /api/v1/artifacts/complete`). Files can be up to 10 MB, videos (mp4, webm, mov) up to 100 MB, within your plan's storage.
 
 You can also pin in the same call via `pin_to_entity_type` + `pin_to_entity_id` (one of `company`, `space`, `project`, `task`) — saves a follow-up `pin_artifact` RPC.
 

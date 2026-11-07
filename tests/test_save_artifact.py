@@ -1,4 +1,4 @@
-"""save_artifact: the file goes from disk straight to storage.
+"""upload_file: the file goes from disk straight to storage.
 
 agent_router /api/v1/artifacts/upload-url gives a link signed for the file's
 type and size; the file is streamed there with those headers; then
@@ -75,7 +75,7 @@ class SaveArtifact(unittest.TestCase):
         raise AssertionError(path)
 
     def test_streams_the_file_to_the_signed_link_then_completes(self):
-        out = parsed(asyncio.run(mcp_server.save_artifact(self.path, "video/mp4", "clip.mp4", title="Demo")))
+        out = parsed(asyncio.run(mcp_server.upload_file(self.path, "video/mp4", "clip.mp4", title="Demo")))
         self.assertEqual(out, {"artifact_id": "a1", "size": len(self.data)})
 
         (path1, asked), (path2, done) = [c.args for c in self.post.await_args_list]
@@ -99,21 +99,21 @@ class SaveArtifact(unittest.TestCase):
         self.post.side_effect = None
         self.post.return_value = {"error": "HTTP 422 from POST /api/v1/artifacts/upload-url",
                                   "body": "File is too large: 101.0 MB. The limit is 100.0 MB per file."}
-        out = parsed(asyncio.run(mcp_server.save_artifact(self.path, "video/mp4", "clip.mp4")))
+        out = parsed(asyncio.run(mcp_server.upload_file(self.path, "video/mp4", "clip.mp4")))
         self.assertIn("101.0 MB", out["body"])
         self.assertEqual(self.puts, [])
         self.assertEqual(self.post.await_count, 1)
 
     def test_a_storage_refusal_stops_before_completing(self):
         self.storage_status = 403
-        out = parsed(asyncio.run(mcp_server.save_artifact(self.path, "video/mp4", "clip.mp4")))
+        out = parsed(asyncio.run(mcp_server.upload_file(self.path, "video/mp4", "clip.mp4")))
         self.assertIn("Storage refused the upload of clip.mp4", out["message"])
         self.assertEqual([c.args[0] for c in self.post.await_args_list], ["/api/v1/artifacts/upload-url"])
 
     def test_an_empty_file_is_refused_locally(self):
         empty = os.path.join(self._tmp.name, "empty.txt")
         pathlib.Path(empty).write_bytes(b"")
-        out = parsed(asyncio.run(mcp_server.save_artifact(empty, "text/plain", "empty.txt")))
+        out = parsed(asyncio.run(mcp_server.upload_file(empty, "text/plain", "empty.txt")))
         self.assertIn("is empty", out["message"])
         self.post.assert_not_awaited()
 

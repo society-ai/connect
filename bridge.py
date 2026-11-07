@@ -62,6 +62,7 @@ from config import (
     ws_url,
 )
 from contacts import (
+    UPDATES_SESSION,
     Sender,
     clamp,
     classify_sender,
@@ -73,7 +74,7 @@ from contacts import (
 from dataclasses import replace
 import folders
 from attachments import FILES_DIRNAME, Attachment, fetch_all, parse_file_parts, prompt_block
-from chat_context import chat_headers, valid_chat_id, valid_tool_name
+from chat_context import chat_headers, valid_chat_id
 from typing import Any, Optional
 
 logging.basicConfig(
@@ -637,7 +638,7 @@ class AgentContext:
             # says otherwise.
             "AGENT_ROUTER_API_URL": self.api_url,
             "SOCIETY_AI_BRIDGE_SOCKET": self.socket,
-            # Where get_file saves what it opens: the agent's work folder.
+            # Where download_file saves what it opens: the agent's work folder.
             "SOCIETY_AI_WORK_DIR": self.work_dir,
         }
 
@@ -688,18 +689,6 @@ class Bridge:
         self._chat_history: dict[str, list[dict[str, str]]] = {}
         # Per-task lock to serialize messages in the same conversation
         self._task_locks: dict[str, asyncio.Lock] = {}
-
-        # Outbound JSON-RPC correlation tables, used by the IPC handlers
-        # for search_agents and send_message.
-        # _pending_requests:    req_id -> Future, resolved when the hub
-        #                       sends back a regular {"id": req_id, "result": ...}
-        # _pending_delegations: req_id -> Future, resolved when the hub
-        #                       sends a `delegation.result` notification
-        #                       carrying params.original_id == req_id.
-        # Both maps use string keys per the connector convention.
-        self._pending_requests: dict[str, asyncio.Future] = {}
-        self._pending_delegations: dict[str, asyncio.Future] = {}
-        self._ipc_msg_counter = 0
 
         # Session mode (v0.7): persistent interactive sessions per work item.
         # Hub + manager are created here; started in run(). Standard mode only.
@@ -901,30 +890,6 @@ class Bridge:
                     logger.warning("Heartbeat failed: %s", e)
                     break
 
-    def _next_ipc_id(self) -> str:
-        """Generate a unique JSON-RPC id for IPC-initiated outbound requests."""
-        self._ipc_msg_counter += 1
-        return f"ipc-{os.getpid()}-{self._ipc_msg_counter}"
-
-    def _resolve_pending(self, mapping: dict[str, asyncio.Future], key: str | None, value: Any) -> bool:
-        """If key is registered, resolve its Future with value. Returns True if resolved."""
-        if not key:
-            return False
-        fut = mapping.get(key)
-        if fut is not None and not fut.done():
-            fut.set_result(value)
-            return True
-        return False
-
-    def _abort_all_pending(self, reason: str) -> None:
-        """Resolve all pending IPC futures with an error — used on WS disconnect."""
-        err = {"error": True, "message": reason}
-        for mapping in (self._pending_requests, self._pending_delegations):
-            for key, fut in list(mapping.items()):
-                if not fut.done():
-                    fut.set_result(err)
-                mapping.pop(key, None)
-
     # -- Message handling ----------------------------------------------------
 
     async def handle_message(self, raw: str):
@@ -947,12 +912,7 @@ class Bridge:
             err = msg.get("error")
             result = msg.get("result")
 
-            # If this id matches a pending IPC request, resolve it.
-            payload = ({"error": True, "message": str(err)} if err is not None else result)
-            if self._resolve_pending(self._pending_requests, msg_id, payload):
-                return
-
-            # Otherwise — legacy handling for the registration ack.
+            # The registration ack (the only request we wait on).
             if err is not None:
                 logger.error("RPC error: %s", err)
                 return
@@ -1032,136 +992,8 @@ class Bridge:
         elif method == "agent.update":
             await self.handle_agent_update(msg_id, params)
 
-        elif method == "delegation.result":
-            # Two-phase delegation: the hub correlates the result back to
-            # our original agent.send_task via `original_id`.
-            original_id_raw = params.get("original_id") if isinstance(params, dict) else None
-            original_id = str(original_id_raw) if original_id_raw is not None else None
-            if not self._resolve_pending(self._pending_delegations, original_id, params):
-                logger.debug("delegation.result for unknown original_id=%s", original_id)
-
         else:
             logger.debug("Unhandled method: %s", method)
-
-    # -- Outbound IPC handlers (used by the bridge IPC server) -------------
-
-    async def ipc_search_agents(self, params: dict) -> dict:
-        """Run an `agent.search` JSON-RPC request over our WS connection.
-
-        Called by the IPC server on behalf of the MCP server's `search_agents`
-        tool. Returns either the hub's search result or a structured error.
-        Hub contract: method `agent.search`, params {query, limit} — the same
-        names the OpenClaw connector uses.
-        """
-        if not self.ws or not self.registered:
-            return {"error": True, "message": "Bridge is not currently connected to the Society AI hub"}
-        q = params.get("q") or params.get("query")
-        if not isinstance(q, str) or not q.strip():
-            return {"error": True, "message": "search_agents requires a non-empty 'q'"}
-        limit = int(params.get("limit", 10))
-        limit = max(1, min(50, limit))
-
-        req_id = self._next_ipc_id()
-        loop = asyncio.get_event_loop()
-        fut = loop.create_future()
-        self._pending_requests[req_id] = fut
-        try:
-            await self.send_rpc("agent.search", {"query": q.strip(), "limit": limit}, msg_id=req_id)
-            try:
-                result = await asyncio.wait_for(fut, timeout=30)
-            except asyncio.TimeoutError:
-                return {"error": True, "message": "agent.search timed out after 30s"}
-            return result if isinstance(result, dict) else {"agents": result}
-        finally:
-            self._pending_requests.pop(req_id, None)
-
-    async def ipc_send_message(self, params: dict) -> dict:
-        """Run an `agent.send_task` over our WS connection and wait for
-        the asynchronous `delegation.result` notification.
-
-        Hub contract: params {agent_id, message, skill_id (required),
-        session_id?, task_id?}; correlation is the request's JSON-RPC id,
-        echoed back as `original_id` on the delegation.result notification.
-
-        Implements the two-phase pattern. Phase 2 (delegation result future)
-        is pre-registered BEFORE Phase 1 (request send) to avoid the race
-        where the hub's notification arrives before we install the handler.
-        """
-        if not self.ws or not self.registered:
-            return {"error": True, "message": "Bridge is not currently connected to the Society AI hub"}
-
-        agent_name = (params.get("agent_name") or "").strip()
-        message = params.get("message")
-        skill_id = (params.get("skill_id") or "").strip()
-        if not agent_name:
-            return {"error": True, "message": "send_message requires 'agent_name'"}
-        if not isinstance(message, str) or not message:
-            return {"error": True, "message": "send_message requires non-empty 'message'"}
-        if not skill_id:
-            return {
-                "error": True,
-                "message": (
-                    "send_message requires 'skill_id' (the hub routes and bills "
-                    "by skill): 'chat' for a conversation, or a skill id from "
-                    "search_agents."
-                ),
-            }
-        timeout = int(params.get("timeout", 120))
-        timeout = max(5, min(600, timeout))
-
-        req_id = self._next_ipc_id()
-        loop = asyncio.get_event_loop()
-
-        # Phase 2 future MUST be registered before Phase 1 send.
-        delegation_fut = loop.create_future()
-        self._pending_delegations[req_id] = delegation_fut
-
-        # Phase 1 ack future — gives us the task_id and lets us fail fast
-        # if the hub rejects the request (bad agent, no permission, etc.).
-        ack_fut = loop.create_future()
-        self._pending_requests[req_id] = ack_fut
-
-        rpc_params: dict[str, Any] = {
-            "agent_id": agent_name,
-            "message": message,
-            "skill_id": skill_id,
-        }
-        if params.get("session_id"):
-            rpc_params["session_id"] = params["session_id"]
-        if params.get("task_id"):
-            rpc_params["task_id"] = params["task_id"]
-        # System of Record context the hub binds for this send.
-        chat_id = valid_chat_id(params.get("chat_id"))
-        if chat_id:
-            rpc_params["chat_id"] = chat_id
-        tool = valid_tool_name(params.get("tool"))
-        if tool:
-            rpc_params["tool"] = tool
-
-        try:
-            await self.send_rpc("agent.send_task", rpc_params, msg_id=req_id)
-
-            try:
-                ack = await asyncio.wait_for(ack_fut, timeout=15)
-            except asyncio.TimeoutError:
-                return {"error": True, "message": "Hub did not acknowledge the delegation within 15s"}
-            if isinstance(ack, dict) and ack.get("error"):
-                return ack
-
-            try:
-                final = await asyncio.wait_for(delegation_fut, timeout=timeout)
-            except asyncio.TimeoutError:
-                return {
-                    "error": True,
-                    "message": f"Delegation timed out after {timeout}s",
-                    "ack": ack,
-                }
-            if isinstance(final, dict) and final.get("error"):
-                return final
-            return {"ack": ack, "result": final}
-        finally:
-            self._pending_requests.pop(req_id, None)
-            self._pending_delegations.pop(req_id, None)
 
     # -- Task execution ------------------------------------------------------
 
@@ -1962,7 +1794,7 @@ class Bridge:
 
         Long results are truncated to MAX_RESULT_CHARS; we log the original
         length so a missing tail can be diagnosed from the bridge logs.
-        TODO: when save_artifact is wired up, upload long results to the
+        TODO: when upload_file is wired up, upload long results to the
         artifact store and replace with a short link instead of truncating.
         """
         original_len = len(result_text or "")
@@ -2754,7 +2586,7 @@ class Bridge:
             return
 
         if fetch_task is not None:
-            # get_file is only in sessions that load the society-ai MCP:
+            # download_file is only in sessions that load the society-ai MCP:
             # the owner's, and "act" contacts'.
             fetched = await fetch_task
             content = content + "\n\n" + prompt_block(
@@ -2845,9 +2677,11 @@ class Bridge:
                     )
                     return
             if sender is not None and sender.session:
-                # What the Lead writes in its updates session is for its own context;
-                # it acts through tools. Nothing of it goes back to Society AI.
-                text = "Handled in the updates session."
+                # What the agent writes in a long-lived session (the Lead's updates, a
+                # group chat) is for its own context; it acts through tools, in a
+                # group with send_group_message. Nothing of it goes back to Society AI.
+                text = ("Handled in the updates session." if sender.session == UPDATES_SESSION
+                        else "Handled in the group's session.")
             await self._send_task_complete(task_id, text or "(no reply)", exit_code=0)
         finally:
             self._pending_session_tasks.pop(task_id, None)
@@ -2973,10 +2807,6 @@ class Bridge:
                         self.ws = None
                         self.registered = False
                         self._registered_event.clear()
-                        # Anything waiting on a pending IPC reply must be
-                        # told the WS is gone, otherwise the caller hangs
-                        # until its own timeout.
-                        self._abort_all_pending("WebSocket connection closed")
 
             except InvalidStatus as e:
                 # HTTP-level failure on the WS handshake (e.g. 401 from bad JWT)
@@ -3116,8 +2946,6 @@ def main():
     bridge = Bridge(ctx)
     ipc = bridge_ipc.IPCServer(
         handlers={
-            "search_agents": bridge.ipc_search_agents,
-            "send_message": bridge.ipc_send_message,
             "mirror_notify": bridge.ipc_mirror_notify,
             "status": bridge.ipc_status,
             "reap_session": bridge.ipc_reap_session,

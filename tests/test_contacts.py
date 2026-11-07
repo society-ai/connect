@@ -107,6 +107,48 @@ class ClassifySender(unittest.TestCase):
         s = classify_sender({"from": {"kind": "platform"}}, {"user_id": OWNER_ID}, OWNER_ID)
         self.assertFalse(s.is_owner)
 
+    def test_a_group_mention_lands_in_that_groups_session_never_as_the_owner(self):
+        # A2A docs/design/group-chat.md §5.3: the router's wake for a group mention.
+        frame = {"from": {"kind": "group", "id": "g-1", "name": "Builders", "sender": "dana", "message_id": 7},
+                 "session": "group:g-1"}
+        for meta in ({"user_id": OWNER_ID, "sender_access": {"kind": "user", "permission": "owner"}},
+                     {"user_id": OWNER_ID, "sender_access": {"kind": "agent", "permission": "read"}}):
+            s = classify_sender(frame, meta, OWNER_ID)
+            self.assertFalse(s.is_owner)
+            self.assertEqual(s.session, "group:g-1")
+            self.assertEqual(s.key, "group:g-1")
+        # The group's level applies; anything else is chat.
+        self.assertEqual(classify_sender(frame, {"user_id": OWNER_ID, "sender_access": {"permission": "read"}},
+                                         OWNER_ID).permission, "read")
+        self.assertEqual(classify_sender(frame, {"user_id": OWNER_ID, "sender_access": {"permission": "owner"}},
+                                         OWNER_ID).permission, "chat")
+
+    def test_a_late_reply_returns_to_the_owners_chat_it_was_sent_from(self):
+        # A2A agent_router/triggers/reply.py: the answer to this agent's own message.
+        frame = {"from": {"kind": "agent", "name": "dana-claw", "permission": "chat", "in_reply_to": "t-1"}}
+        s = classify_sender(frame, {"user_id": OWNER_ID, "chat_id": "chat-1"}, OWNER_ID)
+        self.assertTrue(s.is_owner)
+        self.assertEqual(s.session, "")  # the chat's own session, mirrored like any owner chat
+        # Not for this owner, or with no chat to go back to: the other agent's message, in its own session.
+        for meta in ({"user_id": "someone-else", "chat_id": "chat-1"}, {"user_id": OWNER_ID}):
+            s = classify_sender(frame, meta, OWNER_ID)
+            self.assertFalse(s.is_owner)
+            self.assertEqual((s.key, s.permission), ("agent:dana-claw", "chat"))
+        # Without in_reply_to, the owner's chat id never makes an agent the owner.
+        plain = {"from": {"kind": "agent", "name": "dana-claw"}}
+        self.assertFalse(classify_sender(plain, {"user_id": OWNER_ID, "chat_id": "chat-1"}, OWNER_ID).is_owner)
+
+    def test_two_groups_never_share_a_session(self):
+        a = classify_sender({"from": {"kind": "group", "id": "g-1"}}, {}, OWNER_ID)
+        b = classify_sender({"from": {"kind": "group", "id": "g-2"}}, {}, OWNER_ID)
+        self.assertNotEqual(a.session, b.session)
+        self.assertNotEqual(a.key, b.key)
+
+    def test_a_group_frame_without_an_id_is_an_unknown_contact(self):
+        s = classify_sender({"from": {"kind": "group", "name": "x"}}, {"user_id": OWNER_ID}, OWNER_ID)
+        self.assertFalse(s.is_owner)
+        self.assertEqual(s.session, "")
+
     def test_owner_user_id_alone_is_not_the_owner(self):
         for kind in ("supervisor", "agent", "user", ""):
             frame = {"from": {"kind": kind, "name": "jenkins"}}

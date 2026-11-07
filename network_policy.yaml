@@ -4,7 +4,8 @@
 # because OpenShell rejects policy updates that omit them.
 #
 # Network policies are the hot-reloadable section.
-# {{SOCIETY_AI_HOST}} is replaced at runtime with the hostname from AGENT_ROUTER_API_URL.
+# {{SOCIETY_AI_HOST}} is replaced at runtime with the hostname from AGENT_ROUTER_API_URL, and
+# {{SOCIETY_AI_CATALOG_HOST}} with the Society AI tool catalog's (catalog_client.catalog_url).
 #
 # Binary paths under /sandbox/.venv/bin/* correspond to the dedicated MCP
 # server virtualenv that sandbox.py provisions. Egress for Society AI API,
@@ -52,11 +53,12 @@ network_policies:
       - { path: /usr/local/bin/claude }
       - { path: /usr/bin/node }
 
-  # Society AI — MCP server REST calls to Agent Router
+  # Society AI: the MCP server's calls to the Agent Router and to the tool catalog (Society Connect)
   society_ai:
     name: society-ai
     endpoints:
       - { host: "{{SOCIETY_AI_HOST}}", port: 443 }
+      - { host: "{{SOCIETY_AI_CATALOG_HOST}}", port: 443 }
     binaries:
       - { path: /sandbox/.venv/bin/python }
       - { path: /sandbox/.venv/bin/python3 }

@@ -81,8 +81,9 @@ class Sender:
     # "Society-AI-<group>".
     group: str = ""
     # A named long-lived session this sender always lands in ("updates": Society
-    # AI's updates for the owner's Lead agent). Never mirrored into a Society AI
-    # chat and never tracked; its replies go nowhere.
+    # AI's updates for the owner's Lead agent; "group:<id>": a group chat). Never
+    # mirrored into a Society AI chat and never tracked; its replies go nowhere,
+    # the agent acts through tools (in a group: send_group_message).
     session: str = ""
 
 
@@ -121,8 +122,21 @@ def classify_sender(frame: Optional[dict], metadata: dict, owner_id: Optional[st
     session = str(frame.get("session") or "") if isinstance(frame, dict) else ""
     if kind == "platform" and owner_match and session == UPDATES_SESSION:
         return UPDATES
+    # A group chat mention (A2A docs/design/group-chat.md §5.3): one session per
+    # group, never the owner, whoever wrote, since anyone in the group shares the
+    # thread. The level is the group's, from the router's sender_access.
+    group_id = str(frm.get("id") or "").strip()
+    if kind == "group" and group_id:
+        return group_sender(group_id, str(frm.get("name") or "").strip(), metadata)
 
     name = str(frm.get("name") or "").strip()
+    # The late answer to a message this agent sent from one of its owner's
+    # chats (the router's reply trigger, A2A agent_router/triggers/reply.py):
+    # back into that chat's session, where the agent asked. Only for this
+    # owner and only with the chat: otherwise it is the other agent's message,
+    # in that agent's own session, like any other.
+    if kind == "agent" and name and frm.get("in_reply_to") and owner_match and metadata.get("chat_id"):
+        return Sender(is_owner=True, label=f"a reply from {name}")
     if kind == "agent" and name:
         key = f"agent:{_safe_key_part(name)}"
         owner_name = str(frm.get("owner_name") or "").strip()
@@ -137,6 +151,18 @@ def classify_sender(frame: Optional[dict], metadata: dict, owner_id: Optional[st
     if permission not in PERMISSION_LEVELS:
         permission = DEFAULT_PERMISSION
     return Sender(is_owner=False, key=key, label=label, permission=permission, group=group)
+
+
+def group_sender(group_id: str, name: str, metadata: dict) -> Sender:
+    access = metadata.get("sender_access") if isinstance(metadata.get("sender_access"), dict) else {}
+    permission = access.get("permission")
+    if permission not in PERMISSION_LEVELS:
+        permission = DEFAULT_PERMISSION
+    label = f"the group {name}" if name else "a group"
+    return Sender(
+        is_owner=False, key=f"group:{_safe_key_part(group_id)}", label=label, permission=permission,
+        group=f"Group {name}" if name else "Groups", session=f"group:{group_id}",
+    )
 
 
 def contact_work_item_key(sender: Sender, frame: Optional[dict], metadata: dict,

@@ -344,16 +344,17 @@ class SandboxManager:
         #
         # Note: in secured mode the bridge (host) and the MCP server
         # (sandbox) live in different filesystem namespaces, so the IPC
-        # socket is NOT reachable. search_agents / send_message will
-        # return an "IPC socket not found" error from inside the sandbox;
-        # this is intentional. We point SOCIETY_AI_BRIDGE_SOCKET at a path
-        # under /tmp so the error message names something coherent.
+        # socket is NOT reachable: the session's chat lookup finds no chat
+        # and calls go without one. We point SOCIETY_AI_BRIDGE_SOCKET at a
+        # path under /tmp so any error names something coherent.
         env_block = {
             "AGENT_ROUTER_API_URL": self._env_vars.get("AGENT_ROUTER_API_URL", ""),
             "SOCIETY_AI_AUTH_TOKEN": self._env_vars.get("SOCIETY_AI_AUTH_TOKEN", ""),
             "AGENT_NAME": self._env_vars.get("AGENT_NAME", ""),
             "COMPANY_ID": self._env_vars.get("COMPANY_ID", ""),
             "SOCIETY_AI_BRIDGE_SOCKET": "/tmp/society-ai-bridge.sock",
+            # The tool catalog, when not the router's mcp. neighbour (catalog_client.catalog_url).
+            "SOCIETY_AI_CONNECT_URL": os.environ.get("SOCIETY_AI_CONNECT_URL", ""),
         }
         settings = {
             "mcpServers": {
@@ -399,6 +400,10 @@ class SandboxManager:
         parsed = urlparse(api_url)
         api_host = parsed.hostname or "api.societyai.com"
         policy_content = policy_content.replace("{{SOCIETY_AI_HOST}}", api_host)
+        # The tool catalog the MCP server lists and calls (mcp. beside api. in production).
+        import catalog_client
+        catalog_host = urlparse(catalog_client.catalog_url(api_url)).hostname or "mcp.societyai.com"
+        policy_content = policy_content.replace("{{SOCIETY_AI_CATALOG_HOST}}", catalog_host)
 
         # Write to temp file and apply via openshell policy set
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:

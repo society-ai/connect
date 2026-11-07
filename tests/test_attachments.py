@@ -142,7 +142,7 @@ class Prompt(unittest.TestCase):
         owner = prompt_block([ok, bad], can_get_file=True)
         self.assertIn("/w/files/p.png", owner)
         self.assertIn("open it with the Read tool", owner)
-        self.assertIn(f'get_file("{AID2}")', owner)
+        self.assertIn(f'download_file("{AID2}")', owner)
         contact = prompt_block([ok, bad], can_get_file=False)
         self.assertNotIn("get_file", contact)
 

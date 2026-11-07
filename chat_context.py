@@ -3,8 +3,8 @@ the app Chat a piece of agent work happens in, and which Society AI tool
 made the call.
 
 Every SoR event names the Chat it was made in. The router learns it from the
-`X-Society-Chat` header on HTTP calls and from `chat_id` on the hub's
-`agent.send_task`; it forwards the id to the app, which keeps it only when
+`X-Society-Chat` header on HTTP calls, and Society Connect from the `chat_id`
+the MCP server fills into catalog calls; it forwards the id to the app, which keeps it only when
 that Chat belongs to the agent's owner. A wrong or foreign id is dropped
 silently, so a best-effort value is fine, and nothing is sent when unknown.
 
@@ -16,8 +16,7 @@ Where the id comes from:
   - a one-shot spawn gets it directly as SOCIETY_AI_CHAT_ID.
 
 Calls the society-ai MCP server makes for a tool also send `X-Society-Tool`
-with the MCP tool name, so the router records them as that tool's calls
-(on the hub, `tool` on `agent.send_task`).
+with the MCP tool name, so the router records them as that tool's calls.
 The bridge's own housekeeping (recording uploads, delivery ticks) never
 does. Claude Code's local tools (Bash, Read, ...) never reach the router.
 """

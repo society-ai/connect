@@ -206,58 +206,6 @@ class SessionChat(unittest.TestCase):
             self.assertEqual(run(b.ipc_session_chat({"session_key": "work-1"})), {"chat_id": ""})
 
 
-class HubSend(unittest.TestCase):
-    def send(self, params):
-        with tempfile.TemporaryDirectory() as d:
-            ctx = bridge.AgentContext(
-                name="jenkins", token="sai_x", work_dir=d, extra_dirs=[], company_id="",
-                api_url="https://api.x", socket=f"{d}/b.sock", state_dir=d,
-            )
-            b = bridge.Bridge(ctx)
-            b.ws, b.registered = object(), True
-            sent = {}
-
-            async def send_rpc(method, rpc_params, msg_id=None):
-                sent["method"], sent["params"] = method, rpc_params
-                b._pending_requests[msg_id].set_result({"error": True, "message": "stop here"})
-
-            b.send_rpc = send_rpc
-            run(b.ipc_send_message({"agent_name": "nova", "message": "hi", "skill_id": "chat", **params}))
-            return sent
-
-    def test_send_task_carries_the_chat_and_tool(self):
-        sent = self.send({"chat_id": CHAT, "tool": "send_message"})
-        self.assertEqual(sent["method"], "agent.send_task")
-        self.assertEqual(sent["params"]["chat_id"], CHAT)
-        self.assertEqual(sent["params"]["tool"], "send_message")
-
-    def test_no_or_bad_context_is_left_out(self):
-        params = self.send({})["params"]
-        self.assertNotIn("chat_id", params)
-        self.assertNotIn("tool", params)
-        params = self.send({"chat_id": "not-a-chat", "tool": "bad name"})["params"]
-        self.assertNotIn("chat_id", params)
-        self.assertNotIn("tool", params)
-
-    def test_the_send_message_tool_passes_its_name(self):
-        import mcp_server
-
-        captured = {}
-
-        async def ipc(method, params, timeout=60.0):
-            captured.update(params)
-            return {"ok": True}
-
-        async def chat():
-            return CHAT
-
-        with mock.patch.object(mcp_server, "_ipc_call", side_effect=ipc), \
-             mock.patch.object(mcp_server.chat_context, "current_chat_id", side_effect=chat):
-            run(mcp_server.mcp.call_tool("send_message", {"to": "nova", "message": "hi"}))
-        self.assertEqual(captured["tool"], "send_message")
-        self.assertEqual(captured["chat_id"], CHAT)
-
-
 class Recording(unittest.TestCase):
     def test_mirror_batches_name_the_chat(self):
         posts = []

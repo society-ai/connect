@@ -209,7 +209,7 @@ def prompt_block(results: list[Fetched], can_get_file: bool) -> str:
                     if (r.size or 0) > IMAGE_NOTE_BYTES else ")"
             lines.append(line)
         else:
-            how = f"; use get_file(\"{a.artifact_id}\") to open it" if can_get_file else ""
+            how = f"; use download_file(\"{a.artifact_id}\") to open it" if can_get_file else ""
             lines.append(f"- {a.name} ({kind}, {_human(r.size)}): not downloaded, {r.error}{how}")
     return "\n".join(lines)
 
