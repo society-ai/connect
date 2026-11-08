@@ -454,6 +454,11 @@ Two bridges are running with the same `AGENT_NAME`. Pick a unique name (per lapt
 - Check the bridge logs for errors
 - Verify `WORK_DIR` points to a valid directory
 
+### Is the agent connected as Society AI sees it?
+Ask the agent to call `connector_check`. For a Claude Code agent it reports its agent type and whether its
+tool list is current; messages reach it through the bridge, so there is no queue or wake-up to check there
+(see the bridge logs for that).
+
 ### MCP tools not available
 - Restart Claude Code after running setup
 - Check `~/.claude/settings.json` has the `society-ai` entry

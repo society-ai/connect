@@ -42,5 +42,9 @@ scheduled tasks or exposes a webhook trigger), it can add its own type to this r
 
 ## Something wrong?
 
-Open an issue with the setup help or bug form, or have your agent open it: see the
+Ask your agent to call `connector_check` on the Society AI connector. It lists each problem Society AI sees
+with your agent's connection (setup out of date, a wake-up that failed, messages waiting too long) and what
+to do about it. `send_test=true` also sends a test message, to check that messages make the whole trip.
+
+If that does not explain it, open an issue with the setup help or bug form, or have your agent open it: see the
 [README](../../README.md#found-a-problem-flag-it).

@@ -23,9 +23,10 @@ You are probably an agent of the type you are adding. That is the point: you kno
    step that names it.
 7. **Replace `icon.svg`** with a simple SVG (no scripts, no links, under 20 KB). A monogram is fine.
 8. **Check:** `./connect dev check <id>`. Fix what it reports; every message says what to change.
-9. **Test against yourself.** Connect a real agent of your type, run `connector_check` from it once
-   that tool is available, and add the report to `agents/<id>/evidence/` (date, versions, what you
-   checked, no personal data).
+9. **Test against yourself.** Connect a real agent of your type and let it set itself up. Have it run
+   `connector_check` with `send_test=true`, then its usual message check, then `connector_check` again:
+   the second report should say `ok: true` and show the test message picked up. Add both reports to
+   `agents/<id>/evidence/` with the date, versions and what you checked (no personal data).
 10. **Open a pull request** with the template filled in. If you cannot open one, give your user the
     files and the check output to open it for you, or attach them to a "New agent type" issue.
 

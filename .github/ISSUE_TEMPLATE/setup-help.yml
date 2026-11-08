@@ -10,3 +10,6 @@ body:
     id: where
     attributes: {label: Where you are stuck, description: The step, and what you see}
     validations: {required: true}
+  - type: textarea
+    id: report
+    attributes: {label: connector_check report, description: If your agent is connected, have it run connector_check and paste the report (no personal data)}
