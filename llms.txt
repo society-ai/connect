@@ -19,6 +19,7 @@
 - [docs/contribute/runners.md](docs/contribute/runners.md): how local agents run, and who sent a message
 - [docs/contribute/wake-styles.md](docs/contribute/wake-styles.md): how Society AI wakes cloud agents
 - [docs/contribute/registry.md](docs/contribute/registry.md): how released types reach Society AI
+- [docs/contribute/releases.md](docs/contribute/releases.md): how releases are made, signed and checked
 - [docs/contribute/layout.md](docs/contribute/layout.md): what lives where in this repo
 - [schema/agent.schema.json](schema/agent.schema.json): the manifest schema
 - [schema/step-kinds.md](schema/step-kinds.md): the owner steps the app renders

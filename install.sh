@@ -174,7 +174,14 @@ fi
 # ── Update in place, or clone when this machine has no agent yet ───────────
 if [ -n "$TARGET" ]; then
     echo "  Using the agent already installed in $TARGET"
-    if ! git -C "$TARGET" pull --ff-only >/dev/null 2>&1; then
+    # Switch it to the latest release when there is a newer one and it passes its check; setup restarts
+    # the agent afterwards. A tree with local changes is left as it is.
+    # shellcheck source=core/installer/release.sh
+    if ! (cd "$TARGET" && [ -z "$(git status --porcelain --untracked-files=no)" ] \
+            && source core/installer/release.sh && TAG="$(latest_release_tag origin)" && [ -n "$TAG" ] \
+            && git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" \
+            && { [ "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)" ] \
+                 || { verify_release "$TAG" && git checkout --quiet --detach "$TAG"; }; }); then
         echo "  Could not update it (that is OK). Continuing with the version you have."
     fi
 elif [ -e "$DIR" ]; then
@@ -183,14 +190,25 @@ elif [ -e "$DIR" ]; then
     echo "  agent. Move or delete it, then run this command again."
     exit 1
 else
-    if ! git clone "$REPO_URL" "$DIR"; then
+    # The latest release (a tag vX.Y.Z that Society AI built and signed), never the main branch.
+    TAG="$(git ls-remote --tags --refs "$REPO_URL" 'v*' 2>/dev/null | sed -E 's#.*refs/tags/##' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -t. -k1,1V -k2,2n -k3,3n | tail -1)"
+    if [ -z "$TAG" ] || ! git -c advice.detachedHead=false clone --quiet --branch "$TAG" "$REPO_URL" "$DIR"; then
         echo ""
         echo "  Could not download the agent. Check your internet connection"
         echo "  and run this command again."
         exit 1
     fi
+    # shellcheck source=core/installer/release.sh
+    if ! (cd "$DIR" && source core/installer/release.sh && verify_release "$TAG"); then
+        echo ""
+        echo "  The download did not pass its check, so it was not installed. Please tell Society AI:"
+        echo "  https://github.com/society-ai/connect/issues"
+        rm -rf "$DIR"
+        exit 1
+    fi
     TARGET="$(abs_path "$DIR")"
-    echo "  Installed into $TARGET"
+    echo "  Installed $TAG into $TARGET"
 fi
 
 remember_install_dir "$TARGET"

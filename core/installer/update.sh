@@ -15,8 +15,9 @@
 #
 # What it does, in order:
 #   1. Records the version you are on now (git commit + adapter version).
-#   2. Pulls the latest code (fast-forward only; refuses to touch a tree
-#      with local changes to tracked files).
+#   2. Fetches the latest release (a tag vX.Y.Z), checks it is the code
+#      Society AI released (core/installer/release.sh), and switches to it;
+#      refuses to touch a tree with local changes to tracked files.
 #   3. Installs dependencies, but only if requirements.txt or the channel
 #      server's package-lock.json changed.
 #   4. Restarts the bridge service and waits for it to register with the
@@ -236,12 +237,25 @@ if [ -n "$DIRTY" ]; then
 fi
 echo "    Clean."
 
-step "Fetching the latest code"
-if ! git fetch; then
-    abort "git fetch failed (is the network up?)"
+step "Fetching the latest release"
+# Only releases are installed: tags vX.Y.Z that Society AI's release workflow built and signed
+# (core/installer/release.sh).
+# shellcheck source=release.sh
+source "$REPO_DIR/core/installer/release.sh"
+LATEST_TAG="$(latest_release_tag origin)"
+if [ -z "$LATEST_TAG" ]; then
+    abort "no release found (is the network up?)"
 fi
-if ! git pull --ff-only; then
-    abort "the local branch has diverged from the remote and cannot fast-forward; resolve it by hand, then run ./connect update again"
+if ! git fetch --quiet origin "refs/tags/$LATEST_TAG:refs/tags/$LATEST_TAG"; then
+    abort "could not download release $LATEST_TAG (is the network up?)"
+fi
+if [ "$(git rev-parse "$LATEST_TAG^{commit}")" != "$FROM_SHA" ]; then
+    if ! verify_release "$LATEST_TAG"; then
+        abort "release $LATEST_TAG did not pass its check, so it was not installed"
+    fi
+    if ! git checkout --quiet --detach "$LATEST_TAG"; then
+        abort "could not switch to release $LATEST_TAG"
+    fi
 fi
 
 TO_SHA="$(git rev-parse HEAD)"

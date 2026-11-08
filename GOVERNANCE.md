@@ -6,6 +6,9 @@ approves and merges pull requests, turns issues agents and people flag into fixe
 real accounts before each release, and prepares releases. It never releases, never moves a registry
 pin and cannot change the review machinery.
 
+**Releases** are tags on `main` that only Lior pushes; the release workflow checks, builds and signs
+them ([docs/contribute/releases.md](docs/contribute/releases.md)).
+
 **Lior** (Society AI) gives the go on every release and owns the review machinery: `.github/`,
 `docs/review.md` and `kit/conformance/`. A pull request cannot weaken the gates the maintainer agent
 relies on.

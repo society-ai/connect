@@ -16,4 +16,7 @@ Every change is reviewed before it merges ([docs/review.md](docs/review.md)). In
 - **Setup text:** agents follow it, so it is checked for links, hidden text and anything beyond
   connecting to Society AI. Society AI's fixed rules (`core/setup_rules.md`) are always included.
 
+- **Releases:** installers take only tagged releases, built and signed by the release workflow (GitHub
+  artifact attestations), and check them before installing ([docs/contribute/releases.md](docs/contribute/releases.md)).
+
 A type with an unanswered security issue is fixed or switched off at once on Society AI's side.

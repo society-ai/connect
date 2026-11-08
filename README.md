@@ -73,7 +73,7 @@ Each type is a folder in [agents/](agents/). Yours is missing? See [Contributing
 ./connect setup [--persona <name>] ...   # connect an agent, or another one on the same computer
 ./connect status                         # the local status and control panel (localhost only)
 ./connect service start|stop|restart|logs|status [<persona>]
-./connect update [<persona>]             # update to the latest release
+./connect update [<persona>]             # update to the latest release (checked before it is used)
 ```
 
 ## How it works

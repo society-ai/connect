@@ -1,0 +1,76 @@
+name: release
+
+# A release is a tag vX.Y.Z pushed on main, with Lior's go (GOVERNANCE.md). This workflow checks the tagged
+# code, builds the release files, signs them with GitHub artifact attestations and publishes the GitHub
+# Release. install.sh and ./connect update install only releases and check them (core/installer/release.sh).
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write       # create the GitHub Release
+  id-token: write       # sign the attestations (Sigstore, keyless)
+  attestations: write
+
+jobs:
+  # Installers recompute the archive on the user's computer (often a Mac, with Apple's git): make sure it
+  # hashes the same there before anything is published.
+  mac-archive:
+    runs-on: macos-latest
+    outputs:
+      sha: ${{ steps.hash.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: hash
+        run: |
+          SHA="$(/usr/bin/git archive --format=tar --prefix=society-ai-connect/ "${GITHUB_REF_NAME}" | shasum -a 256 | awk '{print $1}')"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: mac-archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The tag is on main and names the version in core/config.py
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$TAG is not on main"; exit 1; }
+          VERSION="$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' core/config.py)"
+          [ "v$VERSION" = "$TAG" ] || { echo "::error::core/config.py says $VERSION, the tag says $TAG"; exit 1; }
+      - name: Install
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: ./connect dev check
+        run: ./connect dev check
+      - name: Build the release files
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          git archive --format=tar --prefix=society-ai-connect/ "$TAG" > "dist/society-ai-connect-$TAG.tar"
+          ./connect registry build --version "$TAG" --out dist/registry.json
+          (cd dist && sha256sum "society-ai-connect-$TAG.tar" registry.json > SHA256SUMS)
+          cat dist/SHA256SUMS
+          LINUX_SHA="$(sha256sum "dist/society-ai-connect-$TAG.tar" | awk '{print $1}')"
+          [ "$LINUX_SHA" = "${{ needs.mac-archive.outputs.sha }}" ] \
+            || { echo "::error::the archive hashes differently on macOS; installers would refuse this release"; exit 1; }
+      - name: Sign (artifact attestations)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/society-ai-connect-*.tar
+            dist/registry.json
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" dist/* --title "Society AI Connect $TAG" --generate-notes --verify-tag
