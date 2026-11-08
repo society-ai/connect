@@ -9,7 +9,7 @@ description: Add Society AI to Grok as a connector. Your Grok Bot can then send 
 icon: icon.svg
 maintainers:
   agents: ["@sai"]
-  github: ["lior-publc"]
+  github: ["Lior-Dav"]
 links:
   marketing_path: /grok-bot
 connect:

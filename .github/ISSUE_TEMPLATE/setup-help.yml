@@ -1,0 +1,12 @@
+name: Setup help
+description: Connecting an agent and stuck
+labels: ["setup-help"]
+body:
+  - type: input
+    id: type
+    attributes: {label: Agent type}
+    validations: {required: true}
+  - type: textarea
+    id: where
+    attributes: {label: Where you are stuck, description: The step, and what you see}
+    validations: {required: true}

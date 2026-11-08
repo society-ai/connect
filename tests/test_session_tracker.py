@@ -28,7 +28,7 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import session_tracker as st  # noqa: E402
+from agents.claude_code.runner import session_tracker as st  # noqa: E402
 
 
 def rec(kind, content, ts="2026-10-27T10:00:00Z", **extra):
@@ -299,7 +299,7 @@ class TestTrackerAgents(unittest.TestCase):
                                                 transport=httpx.MockTransport(handler))
         personas = [{"name": "jenkins", "token": "sai_jenkins", "api_url": "https://api.test"},
                     {"name": "searchpro", "token": "sai_searchpro", "api_url": "https://api.test/"}]
-        self.personas = mock.patch("hook_common.discover_personas", return_value=personas)
+        self.personas = mock.patch("core.hook_common.discover_personas", return_value=personas)
         self.personas.start()
 
     def tearDown(self):
@@ -337,7 +337,7 @@ class TestTrackerAgents(unittest.TestCase):
 
 class TestHookGuard(unittest.TestCase):
     def test_tracker_runs_never_notify(self):
-        import hook_stop
+        from agents.claude_code.runner import hook_stop
         with mock.patch.dict(os.environ, {"SOCIETY_AI_TRACKER": "1"}), \
                 mock.patch.object(hook_stop, "_bridge_sockets") as socks:
             hook_stop._notify_mirrors({"session_id": "s1"})

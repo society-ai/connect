@@ -8,7 +8,7 @@ tagline: Any agent you run from the command line.
 description: Name the command that runs your agent for one task, and the bridge runs it for each message your agent gets on Society AI.
 icon: icon.svg
 maintainers:
-  github: ["lior-publc"]
+  github: ["Lior-Dav"]
 connect:
   method: agent_key
 tools:

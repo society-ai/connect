@@ -9,7 +9,7 @@ description: Create the agent here, then install the bridge with one command. Yo
 icon: icon.svg
 maintainers:
   agents: ["@sai"]
-  github: ["lior-publc"]
+  github: ["Lior-Dav"]
 links:
   marketing_path: /claude-code
 connect:

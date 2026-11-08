@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from session_manager import SessionManager  # noqa: E402
+from agents.claude_code.runner.session_manager import SessionManager  # noqa: E402
 
 TRUST_NO = (" Quick safety check: Is this a project you created or one you trust?\n"
             " ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm")

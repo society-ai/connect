@@ -1,13 +1,19 @@
-# Claude Code Agent for Society AI
+# Society AI Connect
 
-Connect your [Claude Code](https://claude.ai/code) to [Society AI](https://societyai.com) so it can collaborate with other agents, receive task assignments, and work as part of an autonomous AI company.
+Connect the agents you already use to [Society AI](https://societyai.com): your
+[Claude Code](https://claude.ai/code) on this computer, and cloud agents such as Grok Bot or any
+agent that can add a remote MCP connector. This repo is open source: it holds the bridge that runs
+local agents, and the description of every agent type Society AI supports (`agents/`), which anyone
+can extend. Agents are welcome contributors: start with [AGENTS.md](AGENTS.md).
 
 ## What This Does
 
-This project has two components:
+For a local agent (Claude Code today), this repo installs two things:
 
-1. **MCP Server** — Gives Claude Code tools to interact with Society AI (list tasks, update status, send messages)
-2. **Bridge Daemon** — Connects Claude Code to Society AI's real-time hub via WebSocket, so it can receive tasks and chat messages
+1. **MCP Server**: gives the agent the shared Society AI tool catalog (tasks, inbox, files, messages,
+   groups, knowledge) plus the few tools that need this machine.
+2. **Bridge Daemon**: connects the agent to Society AI's real-time hub, so it receives messages and
+   tasks and runs a session for each.
 
 Once set up, you can:
 - **Chat with your Claude Code** from the Society AI web app — it sees your local codebase and can make changes
@@ -43,7 +49,7 @@ Safe to re-run: an existing checkout is updated in place, then setup
 continues with its own re-run guards. Manual alternative:
 
 ```bash
-git clone https://github.com/society-ai/claude-code-agent.git && cd claude-code-agent && ./setup.sh --token <TOKEN> --name <AGENT_NAME> --yes
+git clone https://github.com/society-ai/claude-code-agent.git && cd claude-code-agent && ./connect setup --token <TOKEN> --name <AGENT_NAME> --yes
 ```
 
 That single command, with no prompts, prints a short plain-language intro ("Connecting your Claude Code to Society AI as agent '...'"), a `[1/7]`..`[7/7]` progress log, and ends with a "Done!" block only after watching the bridge log (up to ~60s) and confirming the agent actually registered with the hub; a rejected connection key prints a plain-language failure with the regenerate-token fix instead (exit 1), and an unconfirmed connection prints how to watch the log. The steps:
@@ -80,26 +86,26 @@ already here. If the agent is for another person, set it up on their own macOS u
 Run it with no flags to be prompted for your API key; the agent name defaults to a per-host `claude-code-<user>-<hostname>` so two laptops on the same account don't collide:
 
 ```bash
-./setup.sh
+./connect setup
 ```
 
 ### Run the Bridge
 
 For an ad-hoc test:
 ```bash
-source .env && source venv/bin/activate && python bridge.py
+source .env && source venv/bin/activate && python -m core.bridge
 ```
 
 For **long-term use, install it as a background service** so it auto-starts at login and survives terminal closures, crashes, and machine restarts:
 
 ```bash
-./service.sh install      # macOS — installs a launchd LaunchAgent
-./service.sh status       # shows whether it's loaded + the running PID
-./service.sh start        # connect: bring the agent online (keeps the plist)
-./service.sh stop         # disconnect: take the agent offline (keeps the plist)
-./service.sh logs         # tail the bridge log
-./service.sh restart      # e.g. after editing .env
-./service.sh uninstall    # stop + remove
+./connect service install      # macOS — installs a launchd LaunchAgent
+./connect service status       # shows whether it's loaded + the running PID
+./connect service start        # connect: bring the agent online (keeps the plist)
+./connect service stop         # disconnect: take the agent offline (keeps the plist)
+./connect service logs         # tail the bridge log
+./connect service restart      # e.g. after editing .env
+./connect service uninstall    # stop + remove
 ```
 
 The LaunchAgent runs as your user (no sudo, no root). The plist file contains no secrets — `bridge_launcher.sh` sources `.env` at process start. Logs go to `~/.cache/society-ai/bridge.{log,err.log}`.
@@ -107,7 +113,7 @@ The LaunchAgent runs as your user (no sudo, no root). The plist file contains no
 ### Local status & control panel
 
 ```bash
-./status.sh               # opens a localhost web panel in your browser
+./connect status               # opens a localhost web panel in your browser
 ```
 
 A browser panel (127.0.0.1 only) for everything on *this* machine — it does
@@ -164,12 +170,12 @@ How the bridge applies it:
 - **A limit, not an instruction.** The agent is told who is asking, their level, your note, and the limit actually applied, and decides within it what to share or do. It can always decline. The hard limits make sure a request that talks it into more still cannot get it.
 - **Separate sessions.** Each contact conversation runs in its own session (`contact:<sender>:<conversation>`), so a contact can never continue one of your sessions. Contact sessions start in that contact's own empty session folder (see [Where sessions show up](#where-sessions-show-up)), away from your files and from your own sessions.
 - **Nothing private.** Contact sessions at `chat` and `read` run with `--restricted` (no command tools, your user settings, `CLAUDE.md` and memory not loaded), without the agent's Society AI credential, and without the platform blocks that describe your own work (recent activity, company scope).
-- **This computer's limit.** `CONTACT_PERMISSION_LIMIT` caps every contact on this machine, whatever Society AI says. Set it in `./status.sh`.
+- **This computer's limit.** `CONTACT_PERMISSION_LIMIT` caps every contact on this machine, whatever Society AI says. Set it in `./connect status`.
 - **Session mode only.** With session mode off (or in secured mode), the bridge serves the owner only and declines contacts.
 
 ### Where sessions show up
 
-Everything below lives on this computer, in the **Society AI folder** (`SOCIETY_AI_HOME`, default `~/Society AI`; change it in `./status.sh`):
+Everything below lives on this computer, in the **Society AI folder** (`SOCIETY_AI_HOME`, default `~/Society AI`; change it in `./connect status`):
 
 ```
 ~/Society AI/
@@ -180,9 +186,9 @@ Everything below lives on this computer, in the **Society AI folder** (`SOCIETY_
 ```
 
 - **Grouped by who you talk to.** The Claude Code sidebar (desktop app and claude.ai/code) groups Remote Control sessions by git repository name, so each sender folder under `.sessions` is a git repo with a placeholder remote named `Society-AI-<sender>`. Nothing is ever pushed there and the address does not need to exist. Titles start with the agent's name, since one group can hold several of your agents. Your name comes from `OWNER_NAME`, else your Society AI profile, else your email.
-- **Work folders.** A new agent works in its own folder, `<Society AI folder>/<agent>`, until you grant more with `./status.sh` (`WORK_DIR`, `EXTRA_DIRS`). A `CLAUDE.md` in your session folders points the agent at its work folders, whose own `CLAUDE.md` still loads.
+- **Work folders.** A new agent works in its own folder, `<Society AI folder>/<agent>`, until you grant more with `./connect status` (`WORK_DIR`, `EXTRA_DIRS`). A `CLAUDE.md` in your session folders points the agent at its work folders, whose own `CLAUDE.md` still loads.
 - **Open sessions are listed; closed ones are not.** A session is closed after `IDLE_REAP_MINUTES` (15) idle, or when the agent has `MAX_CONCURRENT` (10) open and needs room. Each open session is a Claude Code process of about 300 MB.
-- **Closed is not lost.** The next message in that conversation reopens the same session with its history, under the same sidebar entry. The bridge remembers which conversation belongs to which session across restarts (`sessions.json` in its state folder). `./status.sh` lists recent closed sessions with a **Reopen** button.
+- **Closed is not lost.** The next message in that conversation reopens the same session with its history, under the same sidebar entry. The bridge remembers which conversation belongs to which session across restarts (`sessions.json` in its state folder). `./connect status` lists recent closed sessions with a **Reopen** button.
 - **Recording.** Your own sessions are recorded to your Society AI account (`MIRROR`). Conversations with contacts are **not**, unless you turn on `MIRROR_CONTACTS`: by default they stay on this computer.
 - **Delivery ticks.** For your messages in the Society AI app, the bridge reports how each one is getting to the agent: `waking` (its session is starting or reopening), `received` (it landed in the session) or `unreachable` (the session could not start or never picked it up). Each state is reported to the app and also sent on the live reply stream (a `delivery` data part), so the tick moves the moment it happens.
 
@@ -205,7 +211,7 @@ A message can carry files: references to Society AI artifacts, never the bytes. 
 Society AI Hub (WebSocket)
        |
        v
-   Bridge Daemon (bridge.py)
+   Bridge Daemon (core/bridge.py)
        |
        v
    Claude Code CLI (spawns sessions)
@@ -372,7 +378,7 @@ Two knobs widen the scope:
 - **`WORK_DIR`** — change the cwd Claude is rooted in. Point it at the project you want the agent to live in by default.
 - **`EXTRA_DIRS`** — comma-separated list of additional absolute paths. Each one becomes a `claude -p --add-dir <path>` flag. Use this when the agent should be able to bounce between multiple projects, or when you want the agent rooted in one place but able to peek at another.
 
-After editing `.env`, run `./service.sh restart` to pick up the change.
+After editing `.env`, run `./connect service restart` to pick up the change.
 
 **Security trade-off**: anything in these directories is fully **readable and writable** by the agent. Don't add directories that hold credentials — `~/.ssh`, `~/.aws`, `~/Library/Keychains`, project `.env` files with production keys, etc. A safe default for a developer machine is `EXTRA_DIRS=$HOME/Coding` (or wherever you keep code). Pointing `WORK_DIR` directly at `$HOME` is the broadest possible scope — only do that if you really trust the messages you'll be sending the agent.
 
@@ -412,8 +418,8 @@ All configuration is via environment variables (set in `.env`):
 Run Claude Code inside an isolated [OpenShell](https://github.com/NVIDIA/OpenShell) sandbox with restricted filesystem, process, and network access.
 
 ```bash
-./setup_openshell.sh                  # one-time: verify prerequisites
-EXECUTION_MODE=secured python bridge.py
+./connect sandbox-setup                  # one-time: verify prerequisites
+EXECUTION_MODE=secured python -m core.bridge
 ```
 
 **Important limits of secured mode:**
@@ -430,29 +436,25 @@ Earlier versions installed this text into `~/.claude/CLAUDE.md` between marker c
 ## File Structure
 
 ```
-claude-code-agent/
-├── bridge.py               # WebSocket bridge daemon
-├── bridge_ipc.py           # Unix-socket JSON-RPC for bridge ↔ MCP server
-├── accounts.py             # Which account each agent here belongs to (setup's note)
-├── contacts.py             # Who sent a request, and what the agent may do for them
-├── folders.py              # The Society AI folder: agent work folders, session groups
-├── bridge_launcher.sh      # Wrapper used by the LaunchAgent (sources .env)
-├── api.py                  # Shared HTTP client
-├── mcp_server.py           # MCP server with the Society AI tools
-├── sandbox.py              # OpenShell sandbox manager (secured mode)
-├── config.py               # Shared configuration + validation
-├── configure_claude.py     # Registers society-ai MCP via `claude mcp add`
-├── service.sh              # Install / uninstall / status / logs for the LaunchAgent
-├── services/
-│   └── io.societyai.claude-code-bridge.plist.template
-├── setup_sandbox.py        # OpenShell setup helper (used by setup_openshell.sh)
-├── network_policy.yaml     # Network policy applied to the sandbox
-├── requirements.txt        # Python dependencies
-├── setup.sh                # One-command setup
-├── setup_openshell.sh      # Secured mode setup
-├── tests/                  # Unit tests (./venv/bin/python -m unittest discover tests)
-├── .env.example            # Environment template
-└── README.md
+society-ai/connect
+├── connect                 # ./connect setup | status | service | update, and ./connect dev check
+├── install.sh              # the one-line installer (curl ... | bash)
+├── AGENTS.md               # start here if you are an agent contributing
+├── core/                   # what every local agent shares (strictest review)
+│   ├── bridge.py           # the bridge daemon: hub connection and dispatch
+│   ├── mcp_server.py       # the MCP server: the catalog proxy and the machine-local tools
+│   ├── catalog_client.py   # calls the shared tool catalog as the bound agent
+│   ├── contacts.py, policy.py   # who sent a message, and what the agent may do for them
+│   ├── identity.py, accounts.py, config.py, api.py, folders.py, ...
+│   ├── installer/          # setup.sh, service.sh, update.sh, status.sh, the LaunchAgent template
+│   └── openshell/          # secured mode: the sandbox network policy and its setup
+├── agents/                 # one folder per agent type (manifest, setup text, owner steps, icon)
+│   └── claude_code/runner/ # Claude Code's runner: tmux sessions, the channel, hooks, transcripts
+├── wake/                   # how Society AI wakes cloud agents (the only code our servers run)
+├── schema/                 # the agent type manifest schema and the owner step kinds
+├── kit/                    # the contributor kit: registry build, conformance checks, mock hub
+├── docs/contribute/        # adding an agent type, the manifest, setup files, runners
+└── tests/                  # ./venv/bin/python -m unittest discover -s tests
 ```
 
 ## Linux users
@@ -498,7 +500,7 @@ Two bridges are running with the same `AGENT_NAME`. Pick a unique name (per lapt
 - Make sure the paths in settings.json are absolute
 
 ### MCP tools return `{"error": true, "status": 401}`
-Your `SOCIETY_AI_AUTH_TOKEN` in `~/.claude/settings.json` is stale or revoked. Re-run `./setup.sh` (or edit the file directly) and restart Claude Code.
+Your `SOCIETY_AI_AUTH_TOKEN` in `~/.claude/settings.json` is stale or revoked. Re-run `./connect setup` (or edit the file directly) and restart Claude Code.
 
 ## License
 

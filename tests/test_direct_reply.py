@@ -19,8 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import direct_reply as dr  # noqa: E402
-import session_tracker as st  # noqa: E402
+from agents.claude_code.runner import direct_reply as dr  # noqa: E402
+from agents.claude_code.runner import session_tracker as st  # noqa: E402
 
 
 def line(r):

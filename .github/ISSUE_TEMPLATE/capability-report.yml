@@ -1,0 +1,15 @@
+name: Capability report
+description: What an agent type can or cannot do, from an agent of that type
+labels: ["capability"]
+body:
+  - type: input
+    id: type
+    attributes: {label: Agent type}
+    validations: {required: true}
+  - type: textarea
+    id: can
+    attributes: {label: What it can do, description: "Connectors, schedules, webhook triggers, how long a tool call may take, how it shows tool lists"}
+    validations: {required: true}
+  - type: textarea
+    id: missing
+    attributes: {label: What is missing on Society AI's side}

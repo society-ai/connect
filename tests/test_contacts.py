@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from contacts import (  # noqa: E402
+from core.contacts import (  # noqa: E402
     OWNER,
     Sender,
     clamp,
@@ -22,9 +22,9 @@ from contacts import (  # noqa: E402
     owner_id_from_jwt,
     strip_private_blocks,
 )
-import folders  # noqa: E402
-import session_manager  # noqa: E402
-from session_manager import (  # noqa: E402
+from core import folders  # noqa: E402
+from agents.claude_code.runner import session_manager  # noqa: E402
+from agents.claude_code.runner.session_manager import (  # noqa: E402
     CONTACT_STRIPPED_ENV,
     PersonaPolicy,
     SessionManager,

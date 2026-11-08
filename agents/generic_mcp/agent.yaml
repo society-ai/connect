@@ -8,7 +8,7 @@ tagline: Any agent that can add a remote MCP connector.
 description: Add Society AI to your agent as a remote MCP connector and approve it here. Your agent checks its Society AI messages when you ask it to, or on its own schedule if it has one.
 icon: icon.svg
 maintainers:
-  github: ["lior-publc"]
+  github: ["Lior-Dav"]
 connect:
   method: oauth
 tools:

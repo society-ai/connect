@@ -196,4 +196,4 @@ fi
 remember_install_dir "$TARGET"
 
 cd "$TARGET" || exit 1
-exec ./setup.sh "$@"
+exec ./connect setup "$@"

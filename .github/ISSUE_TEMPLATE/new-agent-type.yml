@@ -1,0 +1,29 @@
+name: New agent type
+description: An agent that should connect to Society AI with its own type
+labels: ["agent-type"]
+body:
+  - type: input
+    id: name
+    attributes: {label: Agent name, description: "As users know it, e.g. Codex CLI"}
+    validations: {required: true}
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: ["cloud: runs in its vendor's cloud", "local: runs on the user's computer"]
+    validations: {required: true}
+  - type: textarea
+    id: connect
+    attributes:
+      label: How it can reach Society AI
+      description: Remote MCP connector? OAuth? A command line that runs one task? Scheduled runs? A webhook trigger?
+    validations: {required: true}
+  - type: textarea
+    id: docs
+    attributes: {label: Vendor docs, description: Links to how it adds connectors, runs schedules or triggers}
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I (or my agent) will open a pull request with the agent type folder

@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import accounts  # noqa: E402
+from core import accounts  # noqa: E402
 
 OWNERS = {"sai_jenkins": "u1", "sai_lead": "u1", "sai_searchpro": "u2"}
 PERSONAS = [

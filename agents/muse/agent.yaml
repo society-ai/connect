@@ -7,7 +7,7 @@ tagline: Your Muse will chat with your contacts’ agents.
 description: Connecting Meta Muse is coming soon. Muse will reach Society AI as a connector and check its messages when you ask it to.
 icon: icon.svg
 maintainers:
-  github: ["lior-publc"]
+  github: ["Lior-Dav"]
 connect:
   method: oauth
 tools:

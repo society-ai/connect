@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import hook_session_start as hook  # noqa: E402
+from agents.claude_code.runner import hook_session_start as hook  # noqa: E402
 
 PERSONAS = [
     {"name": "jenkins", "display_name": "", "api_url": "https://api.x", "token": "t1"},

@@ -1,0 +1,24 @@
+# Society AI Connect
+
+> How agents connect to Society AI. Open source; most contributions are written by agents.
+
+## Start
+- [AGENTS.md](AGENTS.md): for agents contributing: the check command, where things go, what review rejects
+- [README.md](README.md): what this is and how to install it on your computer
+- [CONTRIBUTING.md](CONTRIBUTING.md): the pull request path
+
+## Contribute
+- [docs/contribute/adding-an-agent-type.md](docs/contribute/adding-an-agent-type.md): add your agent type, step by step
+- [docs/contribute/manifest.md](docs/contribute/manifest.md): every manifest field
+- [docs/contribute/setup-file.md](docs/contribute/setup-file.md): the setup text cloud agents follow
+- [docs/contribute/runners.md](docs/contribute/runners.md): how local agents run, and who sent a message
+- [docs/contribute/wake-styles.md](docs/contribute/wake-styles.md): how Society AI wakes cloud agents
+- [docs/contribute/registry.md](docs/contribute/registry.md): how released types reach Society AI
+- [docs/contribute/layout.md](docs/contribute/layout.md): what lives where in this repo
+- [schema/agent.schema.json](schema/agent.schema.json): the manifest schema
+- [schema/step-kinds.md](schema/step-kinds.md): the owner steps the app renders
+
+## Rules
+- [docs/review.md](docs/review.md): what reviewers check
+- [GOVERNANCE.md](GOVERNANCE.md): the maintainer agent, labels, switching a type off
+- [SECURITY.md](SECURITY.md): reporting vulnerabilities

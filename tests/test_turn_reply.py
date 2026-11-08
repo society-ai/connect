@@ -13,7 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 os.environ.setdefault("SESSION_MODE", "false")
 
-import bridge  # noqa: E402
+from core import bridge  # noqa: E402
 
 EVENT = "task-1"
 
@@ -35,7 +35,7 @@ class TurnReply(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.cwd = self._tmp.name
         self.sid = "sid-1"
-        from transcript_shipper import transcript_path
+        from agents.claude_code.runner.transcript_shipper import transcript_path
         self.path = transcript_path(self.cwd, self.sid)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 

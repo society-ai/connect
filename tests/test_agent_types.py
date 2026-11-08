@@ -27,7 +27,7 @@ if TOOLS:
     from kit.conformance import manifests, policy
     from kit.registry import read_type
 
-from contacts import classify_sender  # noqa: E402
+from core.contacts import classify_sender  # noqa: E402
 
 
 @unittest.skipUnless(TOOLS, "pip install -r requirements-dev.txt")
@@ -157,10 +157,9 @@ class NewType(unittest.TestCase):
     def test_dev_new_makes_a_type_that_passes_after_its_template(self):
         tmp = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
-        for name in ("agents", "core", "kit", "schema"):
+        for name in ("agents", "core", "kit", "schema", "wake"):
             shutil.copytree(ROOT / name, tmp / name)
         shutil.copy(ROOT / "connect", tmp / "connect")
-        shutil.copy(ROOT / "contacts.py", tmp / "contacts.py")
         import subprocess
         out = subprocess.run([sys.executable, str(tmp / "connect"), "dev", "new", "codex", "--kind", "local"],
                              capture_output=True, text=True)

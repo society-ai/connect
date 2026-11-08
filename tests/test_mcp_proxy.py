@@ -18,8 +18,8 @@ import httpx
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import catalog_client  # noqa: E402
-import mcp_server  # noqa: E402
+from core import catalog_client  # noqa: E402
+from core import mcp_server  # noqa: E402
 
 CHAT = "5d86bae8-0000-4000-8000-00000000000c"
 COMPANY = "5d86bae8-0000-4000-8000-00000000000d"

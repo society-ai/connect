@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 os.environ.setdefault("SESSION_MODE", "false")
 
-import bridge  # noqa: E402
+from core import bridge  # noqa: E402
 
 
 class FakeWS:

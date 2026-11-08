@@ -14,7 +14,7 @@ import httpx
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import mcp_server  # noqa: E402
+from core import mcp_server  # noqa: E402
 
 AID = "0a99eb9c-8284-45b9-8a4a-27fe159bd509"
 

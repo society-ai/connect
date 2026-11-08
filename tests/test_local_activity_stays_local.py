@@ -13,7 +13,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from transcript_shipper import TranscriptShipper  # noqa: E402
+from agents.claude_code.runner.transcript_shipper import TranscriptShipper  # noqa: E402
 
 SECRET = "sk-live-SECRET123"
 
@@ -69,7 +69,7 @@ class NoSettingWidensIt(unittest.TestCase):
     def test_old_detail_settings_are_ignored_not_fatal(self):
         env = {**os.environ, "MIRROR_LEVEL": "full", "STATUS_VERBOSITY": "verbose"}
         r = subprocess.run(
-            [sys.executable, "-c", "import config; print(hasattr(config, 'MIRROR_LEVEL'))"],
+            [sys.executable, "-c", "from core import config; print(hasattr(config, 'MIRROR_LEVEL'))"],
             cwd=ROOT, env=env, capture_output=True, text=True,
         )
         self.assertEqual(r.returncode, 0, r.stderr)

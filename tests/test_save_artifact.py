@@ -20,7 +20,7 @@ import httpx
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import mcp_server  # noqa: E402
+from core import mcp_server  # noqa: E402
 
 LINK = {
     "upload_url": "https://s3.test/artifacts/u/a1.mp4?sig",

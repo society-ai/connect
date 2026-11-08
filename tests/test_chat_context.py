@@ -16,13 +16,13 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 os.environ.setdefault("SESSION_MODE", "false")
 
-import api  # noqa: E402
-import attachments  # noqa: E402
-import bridge  # noqa: E402
-import chat_context  # noqa: E402
-import identity  # noqa: E402
-from session_manager import SessionManager, SessionRecord  # noqa: E402
-from transcript_shipper import TranscriptShipper  # noqa: E402
+from core import api  # noqa: E402
+from core import attachments  # noqa: E402
+from core import bridge  # noqa: E402
+from core import chat_context  # noqa: E402
+from core import identity  # noqa: E402
+from agents.claude_code.runner.session_manager import SessionManager, SessionRecord  # noqa: E402
+from agents.claude_code.runner.transcript_shipper import TranscriptShipper  # noqa: E402
 
 CHAT = "3a8c79ae-45b6-4cbd-865d-fadb5e5620df"
 OTHER_CHAT = "e1940c41-5b11-4921-905f-abbda611776c"
@@ -246,7 +246,7 @@ class Files(unittest.TestCase):
 
 class ToolName(unittest.TestCase):
     def test_a_tool_run_names_itself_and_nothing_else_does(self):
-        import mcp_server
+        from core import mcp_server
 
         server = mcp_server.SocietyMCP("test")
 

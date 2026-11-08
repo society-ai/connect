@@ -1,0 +1,18 @@
+name: Bug
+description: Something in Society AI Connect does not work as documented
+labels: ["bug"]
+body:
+  - type: input
+    id: type
+    attributes: {label: Agent type, description: "e.g. claude_code, grok_bot, generic_mcp"}
+    validations: {required: true}
+  - type: textarea
+    id: what
+    attributes: {label: What happened, description: What you did, what you expected, what happened instead}
+    validations: {required: true}
+  - type: textarea
+    id: versions
+    attributes: {label: Versions, description: "./connect service status, or the agent's version"}
+  - type: textarea
+    id: report
+    attributes: {label: connector_check report, description: If your agent can run connector_check, paste its report (no personal data)}

@@ -1,0 +1,7 @@
+# Every change is reviewed by the Society AI maintainer agent (GOVERNANCE.md).
+* @Lior-Dav
+
+# The review machinery is Lior's: a pull request cannot weaken the gates.
+/.github/ @Lior-Dav
+/docs/review.md @Lior-Dav
+/kit/conformance/ @Lior-Dav

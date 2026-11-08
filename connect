@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Society AI Connect developer commands. Run from the repo root.
+"""Society AI Connect. Run from the repo root.
+
+Your agents on this computer:
+
+    ./connect setup [--persona <name>] [--token sai_...] ...   connect an agent (or another one)
+    ./connect status [--no-open]       the local status and control panel
+    ./connect service <command> [<persona>]   start, stop, restart, logs, status, install, uninstall
+    ./connect update [<persona>]       update to the latest release
+    ./connect sandbox-setup            one-time setup for secured mode (OpenShell)
+
+For contributors:
 
     ./connect dev check [<type>]          what CI runs: manifests, setup text, core policy, unit tests
     ./connect dev new <id> --kind cloud|local
@@ -12,6 +22,7 @@ Needs the contributor tools: pip install -r requirements.txt -r requirements-dev
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -32,10 +43,26 @@ def _missing_tools() -> bool:
     return False
 
 
+# The installer scripts behind the user commands (core/installer/, core/openshell/).
+SCRIPTS = {
+    "setup": "core/installer/setup.sh",
+    "status": "core/installer/status.sh",
+    "service": "core/installer/service.sh",
+    "update": "core/installer/update.sh",
+    "sandbox-setup": "core/openshell/setup_openshell.sh",
+}
+
+
+def run_script(name: str, args: list[str]) -> int:
+    script = ROOT / SCRIPTS[name]
+    os.execv("/bin/bash", ["/bin/bash", str(script), *args])
+    return 0  # not reached
+
+
 def dev_check(args) -> int:
     if _missing_tools():
         return 2
-    from contacts import classify_sender
+    from core.contacts import classify_sender
     from kit.conformance import manifests, policy
 
     problems = manifests.check(ROOT, args.type) + policy.check(classify_sender)
@@ -88,6 +115,8 @@ def registry_build(args) -> int:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] in SCRIPTS:
+        return run_script(sys.argv[1], sys.argv[2:])
     parser = argparse.ArgumentParser(prog="connect", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="group", required=True)
     dev = sub.add_parser("dev").add_subparsers(dest="command", required=True)

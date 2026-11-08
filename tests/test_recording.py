@@ -12,9 +12,9 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 os.environ.setdefault("SESSION_MODE", "false")
 
-import bridge  # noqa: E402
-from policy import apply_local_env, default_policy  # noqa: E402
-from transcript_shipper import TranscriptShipper  # noqa: E402
+from core import bridge  # noqa: E402
+from core.policy import apply_local_env, default_policy  # noqa: E402
+from agents.claude_code.runner.transcript_shipper import TranscriptShipper  # noqa: E402
 
 
 class ContactRecording(unittest.TestCase):

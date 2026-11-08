@@ -13,8 +13,8 @@ import httpx
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import attachments  # noqa: E402
-from attachments import Attachment, fetch_all, parse_file_parts, prompt_block, safe_filename  # noqa: E402
+from core import attachments  # noqa: E402
+from core.attachments import Attachment, fetch_all, parse_file_parts, prompt_block, safe_filename  # noqa: E402
 
 AID = "0a99eb9c-8284-45b9-8a4a-27fe159bd509"
 AID2 = "1b2c3d4e-0000-4000-8000-000000000002"
