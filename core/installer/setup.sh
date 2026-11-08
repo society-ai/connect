@@ -59,7 +59,7 @@ PROD_API_URL="https://api.societyai.com"
 
 usage() {
     cat <<EOF
-Usage: ./connect setup [--token sai_...] [--name <agent-name>] [--display-name <name>] [--yes] [--persona <name>] [--url <url>]
+Usage: ./connect setup [--token sai_...] [--name <agent-name>] [--display-name <name>] [--yes] [--persona <name>] [--url <url>] [--type <id>] [--command "<cmd>"]
 
   --token <sai_...>   Society AI API key (get one at https://societyai.com).
                       Falls back to \$SOCIETY_AI_AUTH_TOKEN; flag wins.
@@ -77,6 +77,10 @@ Usage: ./connect setup [--token sai_...] [--name <agent-name>] [--display-name <
                       Only needed for a non-production Society AI
                       environment; written into the env file as
                       AGENT_ROUTER_API_URL. Default: $PROD_API_URL
+  --type <id>         The agent type (a folder in agents/, kind local). Default:
+                      claude_code. Others run through their runner, e.g. codex.
+  --command "<cmd>"   For generic_cli: the command that runs your agent for one
+                      task, with {prompt} where the task goes.
   -h, --help          Show this help.
 
 One-command install:
@@ -91,6 +95,8 @@ CLI_NAME=""
 CLI_DISPLAY_NAME=""
 CLI_URL=""
 ASSUME_YES=0
+AGENT_TYPE_ARG="claude_code"
+CLI_COMMAND=""
 
 need_value() {
     if [ "$2" -lt 2 ]; then
@@ -112,6 +118,10 @@ while [ $# -gt 0 ]; do
         --url)       need_value "$1" $#; CLI_URL="$2"; shift 2 ;;
         --url=*)     CLI_URL="${1#*=}"; shift ;;
         --yes|-y)    ASSUME_YES=1; shift ;;
+        --type)      need_value "$1" $#; AGENT_TYPE_ARG="$2"; shift 2 ;;
+        --type=*)    AGENT_TYPE_ARG="${1#*=}"; shift ;;
+        --command)   need_value "$1" $#; CLI_COMMAND="$2"; shift 2 ;;
+        --command=*) CLI_COMMAND="${1#*=}"; shift ;;
         -h|--help)   usage; exit 0 ;;
         *)
             echo "Error: unknown option: $1" >&2
@@ -120,6 +130,51 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# ── Agent type ─────────────────────────────────────────────────────────────
+# A local type from agents/ (docs/contribute/runners.md). Claude Code is set up with its MCP server,
+# hooks and channel; any other type runs through its runner and needs only its own program.
+TYPE_MANIFEST="agents/$AGENT_TYPE_ARG/agent.yaml"
+if ! printf '%s' "$AGENT_TYPE_ARG" | grep -Eq '^[a-z][a-z0-9_]{1,39}$' || [ ! -f "$TYPE_MANIFEST" ]; then
+    echo "Error: unknown agent type '$AGENT_TYPE_ARG' (see the folders in agents/)" >&2
+    exit 1
+fi
+if ! grep -qE '^kind: *local' "$TYPE_MANIFEST"; then
+    echo "Error: $AGENT_TYPE_ARG is a cloud agent: it connects from its own app, not through this bridge." >&2
+    exit 1
+fi
+if grep -q '{command}' "$TYPE_MANIFEST" && [ -z "$CLI_COMMAND" ]; then
+    echo "Error: $AGENT_TYPE_ARG runs the command you name: add --command \"<cmd> {prompt}\"" >&2
+    exit 1
+fi
+is_claude_code() { [ "$AGENT_TYPE_ARG" = "claude_code" ]; }
+
+# The program this type needs on this computer: its manifest's first permitted binary, or the user's command.
+type_binary() {
+    if [ -n "$CLI_COMMAND" ]; then
+        printf '%s' "$CLI_COMMAND" | awk '{print $1}'
+    else
+        sed -nE 's/^ *binaries: *\[ *"([^"]+)".*/\1/p' "$TYPE_MANIFEST" | head -1
+    fi
+}
+
+# Write KEY=VALUE into an env file, replacing an existing line (values are quoted for the shell).
+set_env_key() {
+    python3 - "$1" "$2" "$3" <<'PYEOF'
+import re, shlex, sys
+path, key, value = sys.argv[1:4]
+try:
+    content = open(path).read()
+except FileNotFoundError:
+    content = ""
+line = f"{key}={shlex.quote(value)}"
+if re.search(rf"^{re.escape(key)}=", content, re.M):
+    content = re.sub(rf"^{re.escape(key)}=.*$", lambda _: line, content, flags=re.M)
+else:
+    content = content.rstrip("\n") + ("\n" if content else "") + line + "\n"
+open(path, "w").write(content)
+PYEOF
+}
 
 # Same shape the WS hub accepts for agent names.
 valid_name() {
@@ -412,6 +467,8 @@ if [ -n "$PERSONA" ]; then
             [ -n "$CLI_DISPLAY_NAME" ] && echo "DISPLAY_NAME=\"$CLI_DISPLAY_NAME\""
             echo "AGENT_ROUTER_API_URL=$PERSONA_API_URL"
             echo "SOCIETY_AI_BRIDGE_SOCKET=$HOME/.cache/society-ai/$PERSONA/bridge.sock"
+            is_claude_code || echo "AGENT_TYPE=$AGENT_TYPE_ARG"
+            [ -n "$CLI_COMMAND" ] && printf 'AGENT_COMMAND=%q\n' "$CLI_COMMAND"
         } > "$ENV_FILE"
         chmod 600 "$ENV_FILE"
         echo "  Wrote $ENV_FILE (mode 0600)"
@@ -589,7 +646,11 @@ if [ "$ASSUME_YES" = 1 ]; then
 fi
 
 # 1. Check prerequisites
-echo "[1/7] Checking that Python and Claude Code are installed..."
+if is_claude_code; then
+    echo "[1/7] Checking that Python and Claude Code are installed..."
+else
+    echo "[1/7] Checking that Python and $(type_binary) are installed..."
+fi
 
 if ! command -v python3 &>/dev/null; then
     echo "" >&2
@@ -607,7 +668,14 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-if ! command -v claude &>/dev/null; then
+if ! is_claude_code; then
+    if ! command -v "$(type_binary)" &>/dev/null; then
+        echo "" >&2
+        echo "  $(type_binary) is not installed (or not on PATH). Install it, sign in to it once," >&2
+        echo "  then run this setup command again. See agents/$AGENT_TYPE_ARG/owner-steps.md." >&2
+        exit 1
+    fi
+elif ! command -v claude &>/dev/null; then
     echo "" >&2
     echo "  Claude Code is not installed. Claude Code is Anthropic's AI" >&2
     echo "  coding assistant that will power your agent. Install it first:" >&2
@@ -621,7 +689,7 @@ if ! command -v claude &>/dev/null; then
 fi
 
 echo "  Python ....... OK"
-echo "  Claude Code .. OK"
+if is_claude_code; then echo "  Claude Code .. OK"; else echo "  $(type_binary) .. OK"; fi
 
 # 2. Create virtual environment
 echo ""
@@ -642,7 +710,7 @@ echo "  Dependencies installed"
 # Best-effort: without them the bridge falls back to the spawn path.
 # Reinstalled whenever the lockfile is newer than the install, so a re-run
 # after a pull picks up dependency fixes.
-if [ -d "agents/claude_code/runner/channel" ] && command -v npm &>/dev/null; then
+if is_claude_code && [ -d "agents/claude_code/runner/channel" ] && command -v npm &>/dev/null; then
     if [ ! -f "agents/claude_code/runner/channel/node_modules/.package-lock.json" ] \
         || [ "agents/claude_code/runner/channel/package-lock.json" -nt "agents/claude_code/runner/channel/node_modules/.package-lock.json" ]; then
         (cd agents/claude_code/runner/channel && npm ci --silent >/dev/null 2>&1) \
@@ -764,6 +832,12 @@ if url:
 PYEOF
 fi
 
+# The agent type, for the bridge (core/config.py AGENT_TYPE): only written when it is not Claude Code.
+if ! is_claude_code; then
+    set_env_key .env AGENT_TYPE "$AGENT_TYPE_ARG"
+    [ -n "$CLI_COMMAND" ] && set_env_key .env AGENT_COMMAND "$CLI_COMMAND"
+fi
+
 # 4. Configure Claude Code MCP server
 echo ""
 echo "[4/7] Connecting your agent to Claude Code..."
@@ -783,7 +857,11 @@ if [ -z "${SOCIETY_AI_AUTH_TOKEN:-}" ]; then
 fi
 
 # Use a dedicated Python script to safely handle paths with special characters
-python3 -m agents.claude_code.runner.configure_claude
+if is_claude_code; then
+    python3 -m agents.claude_code.runner.configure_claude
+else
+    echo "  Skipped: $AGENT_TYPE_ARG runs through its runner, not Claude Code"
+fi
 
 # 5. Remove the Society AI section from ~/.claude/CLAUDE.md if a previous
 # setup installed one. The platform protocol now travels with dispatches
@@ -833,6 +911,8 @@ echo "      (installs the SessionStart and Stop hooks)"
 
 if [ "${SKIP_HOOKS:-}" = "1" ]; then
     echo "  Skipped (SKIP_HOOKS=1)"
+elif ! is_claude_code; then
+    echo "  Skipped: the hooks are Claude Code's"
 else
     python3 -m agents.claude_code.runner.configure_hooks
 fi

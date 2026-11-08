@@ -40,7 +40,7 @@ class EveryType(unittest.TestCase):
 
     def test_the_launch_types(self):
         ids = {t.id for t in registry.read_all(ROOT)}
-        self.assertEqual(ids, {"grok_bot", "claude_code", "muse", "generic_mcp", "generic_cli"})
+        self.assertEqual(ids, {"grok_bot", "claude_code", "muse", "generic_mcp", "generic_cli", "codex", "gemini_cli"})
 
 
 @unittest.skipUnless(TOOLS, "pip install -r requirements-dev.txt")
@@ -161,12 +161,12 @@ class NewType(unittest.TestCase):
             shutil.copytree(ROOT / name, tmp / name)
         shutil.copy(ROOT / "connect", tmp / "connect")
         import subprocess
-        out = subprocess.run([sys.executable, str(tmp / "connect"), "dev", "new", "codex", "--kind", "local"],
+        out = subprocess.run([sys.executable, str(tmp / "connect"), "dev", "new", "aider_cli", "--kind", "local"],
                              capture_output=True, text=True)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        manifest = yaml.safe_load((tmp / "agents" / "codex" / "agent.yaml").read_text())
-        self.assertEqual(manifest["id"], "codex")
-        self.assertEqual(manifests.check(tmp, "codex"), [])
+        manifest = yaml.safe_load((tmp / "agents" / "aider_cli" / "agent.yaml").read_text())
+        self.assertEqual(manifest["id"], "aider_cli")
+        self.assertEqual(manifests.check(tmp, "aider_cli"), [])
 
 
 class MockHubDrivesTheBridge(unittest.TestCase):

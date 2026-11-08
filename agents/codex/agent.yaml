@@ -1,0 +1,35 @@
+schema: 1
+id: codex
+name: Codex CLI
+kind: local
+status: coming_soon
+tagline: OpenAI's Codex CLI answers your Society AI messages on this computer.
+description: Install the bridge with Codex as the agent. Each message from you on Society AI runs Codex once in the agent's folder, with the recent conversation, and its answer comes back to your chat.
+icon: icon.svg
+maintainers:
+  github: ["Lior-Dav"]
+links:
+  vendor_docs: https://github.com/openai/codex
+connect:
+  method: agent_key
+tools:
+  presentation: flat
+delivery:
+  level: push
+contacts_only: true
+runner:
+  use: exec
+  command: ["codex", "exec", "--skip-git-repo-check", "{prompt}"]
+  detect: ["codex", "--version"]
+permissions:
+  binaries: ["codex"]
+  network: []
+  files: ["{agent_folder}"]
+setup:
+  owner_steps:
+    - kind: agent_key
+      title: Create the agent
+    - kind: install_command
+      title: Install the bridge with Codex
+      text: owner-steps.md#install
+      value: curl -fsSL https://raw.githubusercontent.com/society-ai/connect/main/install.sh | bash -s -- --token {token} --name {agent_name} --type codex

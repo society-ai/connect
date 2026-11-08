@@ -45,7 +45,9 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from core import bridge_ipc
 from dataclasses import dataclass, field
 from core.config import (
+    AGENT_COMMAND,
     AGENT_ROUTER_API_URL,
+    AGENT_TYPE,
     SOCIETY_AI_AUTH_TOKEN,
     AGENT_NAME,
     COMPANY_ID,
@@ -149,7 +151,8 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 # Both fields are optional on the wire: older hubs simply ignore unknown
 # params, so nothing needs to negotiate.
 
-FRAMEWORK = "claude_code"
+FRAMEWORK = "claude_code"  # Claude Code itself; the agent type registered is AGENT_TYPE
+CLAUDE_CODE = FRAMEWORK
 
 CLAUDE_VERSION_TIMEOUT = 2  # seconds — `claude --version` must never stall us
 
@@ -694,7 +697,16 @@ class Bridge:
 
         # Session mode (v0.7): persistent interactive sessions per work item.
         # Hub + manager are created here; started in run(). Standard mode only.
-        self._session_mode = SESSION_MODE and EXECUTION_MODE != "secured"
+        # Another local agent type (Codex, ...) runs through its runner (core/runner.py); everything below
+        # about sessions, the channel and transcripts is Claude Code's own.
+        self._runner = None
+        self._runner_sessions: dict = {}  # conversation key -> the runner's SessionHandle
+        if AGENT_TYPE != CLAUDE_CODE:
+            from core.runner import load_runner
+
+            self._runner = load_runner(AGENT_TYPE, AGENT_COMMAND)
+            logger.info("Agent type %s: turns run through its %s runner", AGENT_TYPE, type(self._runner).__name__)
+        self._session_mode = SESSION_MODE and EXECUTION_MODE != "secured" and self._runner is None
         self._channel_hub = None
         self._session_mgr = None
         self._shipper = None  # transcript mirroring; set below in session mode
@@ -745,7 +757,7 @@ class Bridge:
         # claude session id -> set when that session's turn ends (Stop hook),
         # for replies carried into sessions started in Claude Code.
         self._direct_turn_events: dict[str, asyncio.Event] = {}
-        if TRACKING_ENABLED and self.ctx.token:
+        if TRACKING_ENABLED and self.ctx.token and self._runner is None:
             from core.hook_common import discover_personas
             from agents.claude_code.runner.session_tracker import SessionTrackerRunner
             personas = discover_personas()
@@ -855,13 +867,15 @@ class Bridge:
             "agent_name": self.ctx.name,
             "auth_token": self._ws_jwt,
             "visibility": "private",
-            "framework": FRAMEWORK,
+            "framework": AGENT_TYPE,
             "adapter_version": __version__,
             # Lets the Contacts tab show "limited on this computer". The
             # bridge enforces it whatever the platform stores.
             "contact_permission_limit": self._contact_limit(),
         }
-        framework_version = await claude_cli_version_async()
+        framework_version = (
+            await self._runner.version() if self._runner is not None else await claude_cli_version_async()
+        )
         if framework_version:
             # Omitted entirely when undetectable — never send an empty string.
             params["framework_version"] = framework_version
@@ -1095,7 +1109,15 @@ class Bridge:
             async with task_lock:
                 self._active_tasks.add(task_id)
                 try:
-                    if self._session_mode:
+                    if self._runner is not None and not sender.is_owner and not self._runner.capabilities.enforces_limits:
+                        # This type's runner cannot hold a contact to its level (the agent's own tools
+                        # are outside core's reach), so it serves the owner only.
+                        logger.warning("Refusing request %s from contact %s: the %s runner cannot enforce "
+                                       "contact limits", task_id, sender.label, AGENT_TYPE)
+                        await self._send_task_complete(
+                            task_id, "This agent can't take requests from contacts yet.", exit_code=1,
+                        )
+                    elif self._session_mode or self._runner is not None:
                         # v0.7: dispatch into a persistent per-work-item session.
                         # Stable key gives task rework continuity (resume same
                         # session); chat falls back to sessionId/chat/task_id.
@@ -1188,6 +1210,12 @@ class Bridge:
                             _owner_chat_id(metadata)
                             if sender.is_owner and kind == "chat" else None
                         )
+                        if self._runner is not None:
+                            await self._execute_via_runner(
+                                task_id, str(work_item_key), content, standing_text=standing_text,
+                                sender=sender, permission=permission, delivery_chat_id=delivery_chat_id,
+                            )
+                            return
                         await self._execute_via_session(
                             task_id, str(work_item_key), title, content, kind=kind,
                             protocol_text=protocol_text, standing_text=standing_text,
@@ -2429,6 +2457,45 @@ class Bridge:
             await self._send_task_complete(task_id, str(e), exit_code=1)
         finally:
             self._direct_turn_events.pop(session.session_id, None)
+
+    async def _execute_via_runner(
+        self,
+        task_id: str,
+        work_item_key: str,
+        content: str,
+        standing_text: str = "",
+        sender: Sender | None = None,
+        permission: str | None = None,
+        delivery_chat_id: str | None = None,
+    ) -> None:
+        """Run one turn through the agent type's runner (core/runner.py) and complete the A2A task with its
+        reply. core already decided the sender, the conversation and the prompt; the runner only runs it."""
+        from core.runner import ConversationRef, Turn
+
+        if delivery_chat_id:
+            asyncio.ensure_future(self._report_delivery(delivery_chat_id, "received"))
+            asyncio.ensure_future(self._stream_delivery(task_id, "received"))
+        session = self._runner_sessions.get(work_item_key)
+        try:
+            if session is None:
+                session = await self._runner.start(ConversationRef(work_item_key, cwd=self.ctx.work_dir))
+                self._runner_sessions[work_item_key] = session
+            prompt = f"{standing_text}\n\n{content}" if standing_text else content
+            turn = Turn(task_id, prompt, owner=sender is None or sender.is_owner, permission=permission)
+            final, error = None, None
+            async for event in self._runner.run(session, turn):
+                if event.kind == "final":
+                    final = event.text
+                elif event.kind == "error":
+                    error = event.text
+        except Exception as e:  # noqa: BLE001 - the runner failing must still answer the task
+            logger.exception("Runner failed on %s", task_id)
+            self._runner_sessions.pop(work_item_key, None)
+            error = f"{AGENT_TYPE} could not run: {e}"
+        if error is not None:
+            await self._send_task_complete(task_id, error, exit_code=1)
+        else:
+            await self._send_task_complete(task_id, final or "(no reply)")
 
     async def _execute_via_session(
         self,

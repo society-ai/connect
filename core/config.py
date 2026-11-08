@@ -74,6 +74,11 @@ TRACKING_ENABLED: bool = MIRROR_SESSIONS and os.getenv("TRACKING", "true").strip
 
 _VALID_EXECUTION_MODES = {"standard", "secured"}
 EXECUTION_MODE: str = os.getenv("EXECUTION_MODE", "standard").strip().lower()
+
+# The agent type this bridge runs (agents/<id>/): claude_code, or another local type that uses a runner
+# (core/runner.py). AGENT_COMMAND is the user's own command for a generic type (generic_cli).
+AGENT_TYPE: str = os.getenv("AGENT_TYPE", "claude_code").strip() or "claude_code"
+AGENT_COMMAND: str = os.getenv("AGENT_COMMAND", "").strip()
 SANDBOX_NAME: str = os.getenv("SANDBOX_NAME", "society-ai-agent").strip()
 SANDBOX_BASE_IMAGE: str = os.getenv("SANDBOX_BASE_IMAGE", "claude").strip()
 

@@ -21,6 +21,7 @@ Every failure says what to change and links the doc that explains it.
 | Add or improve an agent type | `agents/<id>/` (start with `./connect dev new <id> --kind cloud\|local`) | maintainer agent |
 | Change how a local agent runs | its `agents/<id>/runner/` | maintainer agent, plus a second pass |
 | Change what every local agent shares | `core/` | maintainer agent, plus a second pass |
+| Add or change a generic runner (exec, acp) | `runners/` | maintainer agent, plus a second pass |
 | Add a way to wake cloud agents | `wake/` | maintainer agent, plus a second pass |
 | Change the manifest format | `schema/` (the app must support a new step kind first) | maintainer agent, plus a second pass |
 | Change review itself | `.github/`, `docs/review.md`, `kit/conformance/` | Lior |

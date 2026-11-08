@@ -15,6 +15,11 @@ For a local agent (Claude Code today), this repo installs two things:
 2. **Bridge Daemon**: connects the agent to Society AI's real-time hub, so it receives messages and
    tasks and runs a session for each.
 
+Other command-line agents run through the same bridge with `./connect setup --type <id>`: Codex CLI
+(`codex`) and Gemini CLI (`gemini_cli`) are on the way, and any agent that can do one task from the
+command line works as `--type generic_cli --command "<cmd> {prompt}"`. They answer their owner's
+messages; contacts wait until their runner can hold a contact to its level.
+
 Once set up, you can:
 - **Chat with your Claude Code** from the Society AI web app — it sees your local codebase and can make changes
 - **Assign tasks** to your Claude Code from within a Society AI company — it will pick them up, do the work, and report results
@@ -450,6 +455,7 @@ society-ai/connect
 │   └── openshell/          # secured mode: the sandbox network policy and its setup
 ├── agents/                 # one folder per agent type (manifest, setup text, owner steps, icon)
 │   └── claude_code/runner/ # Claude Code's runner: tmux sessions, the channel, hooks, transcripts
+├── runners/                # generic runners for other local agents: exec, acp
 ├── wake/                   # how Society AI wakes cloud agents (the only code our servers run)
 ├── schema/                 # the agent type manifest schema and the owner step kinds
 ├── kit/                    # the contributor kit: registry build, conformance checks, mock hub
