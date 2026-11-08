@@ -83,7 +83,10 @@ def read_type(folder: Path) -> AgentType:
 
 
 def read_all(root: Path = ROOT, *, templates: bool = False) -> list[AgentType]:
-    folders = sorted(p for p in (root / AGENTS).iterdir() if p.is_dir())
+    """Every type folder under agents/ ("_" folders are templates; Python's __pycache__ and dot folders are not types)."""
+    folders = sorted(
+        p for p in (root / AGENTS).iterdir() if p.is_dir() and not p.name.startswith(("__", "."))
+    )
     return [read_type(p) for p in folders if templates or not p.name.startswith("_")]
 
 

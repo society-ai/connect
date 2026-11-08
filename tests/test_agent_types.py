@@ -33,6 +33,8 @@ from core.contacts import classify_sender  # noqa: E402
 @unittest.skipUnless(TOOLS, "pip install -r requirements-dev.txt")
 class EveryType(unittest.TestCase):
     def test_every_folder_passes_the_checks(self):
+        # Importing agents.claude_code leaves agents/__pycache__ behind; it is not a type folder.
+        (ROOT / "agents" / "__pycache__").mkdir(exist_ok=True)
         self.assertEqual([str(p) for p in manifests.check(ROOT)], [])
 
     def test_core_policy_holds(self):
