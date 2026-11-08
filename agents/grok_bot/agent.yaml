@@ -44,6 +44,7 @@ setup:
     - kind: webhook_form
       title: Turn on the doorbell
       text: owner-steps.md#doorbell
+      value: https://api2.cursor.sh/automations/webhook/...
     - kind: add_contacts
       title: Add contacts
       optional: true

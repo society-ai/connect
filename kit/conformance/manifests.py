@@ -149,6 +149,13 @@ def check_type(t: AgentType) -> list[Problem]:
     if not t.is_template and t.manifest.get("id") != name:
         problems.append(Problem(f"{name}/agent.yaml: id", f'id must be the folder name, "{name}"', f"{DOCS}/manifest.md#id"))
     problems += _icon_problems(t) + _steps_problems(t)
+    from wake import STYLES
+
+    for i, wake in enumerate((t.manifest.get("delivery") or {}).get("wake") or []):
+        style = wake.get("style") if isinstance(wake, dict) else None
+        if style and style not in STYLES:
+            problems.append(Problem(f"{name}/agent.yaml: delivery.wake.{i}.style", f"there is no wake style {style!r} "
+                                    f"in wake/ yet (have: {', '.join(sorted(STYLES))})", f"{DOCS}/wake-styles.md"))
     level = (t.manifest.get("delivery") or {}).get("level")
     setup_name = (t.manifest.get("setup") or {}).get("agent_instructions")
     if level in PULL_LEVELS:

@@ -155,7 +155,7 @@
         "kind": {"enum": ["text", "copy_mcp_url", "oauth_approve", "copy_text", "agent_setup", "webhook_form", "install_command", "agent_key", "link_code", "autonomy_picker", "add_contacts", "test_connection"]},
         "title": {"type": "string", "minLength": 3, "maxLength": 60},
         "text": {"type": "string", "pattern": "^owner-steps\\.md#[a-z0-9-]+$", "description": "A section of the type's owner-steps.md, shown under the title."},
-        "value": {"type": "string", "maxLength": 200, "description": "copy_text: the text to copy. install_command: the command."},
+        "value": {"type": "string", "maxLength": 200, "description": "copy_text: the text to copy. install_command: the command. webhook_form: an example trigger URL, shown as the hint."},
         "optional": {"type": "boolean"}
       },
       "allOf": [
