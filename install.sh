@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Society AI Claude Code agent installer.
+# Society AI Connect installer.
 #
 # Fetched and piped to bash by the one-command install the product renders:
-#   curl -fsSL https://raw.githubusercontent.com/society-ai/claude-code-agent/main/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/society-ai/connect/main/install.sh \
 #     | bash -s -- --token sai_... --name my-agent [--url http://...] --yes
 #
 # Works from any folder. When this machine already has the agent installed,
 # the existing checkout is found and updated in place wherever it lives, so
 # the same command rotates a token or adds a persona without the user having
 # to remember (or be told) which directory to stand in. Only a machine with
-# no install at all clones, into ./claude-code-agent.
+# no install at all clones, into ./society-ai-connect.
 #
 # Where it looks, in order:
 #   1. The current folder, if it is itself a checkout.
-#   2. ./claude-code-agent, if it is a checkout (the classic layout).
+#   2. ./society-ai-connect, if it is a checkout.
 #   3. The folder recorded at ~/.cache/society-ai/install-dir.
 #   4. The WorkingDirectory of every installed bridge LaunchAgent (macOS).
 # Among 3 and 4, a checkout that already knows the --name being set up wins;
@@ -25,8 +25,8 @@
 # every argument untouched and guards all of its own re-run cases.
 set -u
 
-REPO_URL="https://github.com/society-ai/claude-code-agent.git"
-DIR="claude-code-agent"
+REPO_URL="https://github.com/society-ai/connect.git"
+DIR="society-ai-connect"
 STATE_DIR="$HOME/.cache/society-ai"
 POINTER_FILE="$STATE_DIR/install-dir"
 PLIST_DIR="$HOME/Library/LaunchAgents"
@@ -65,7 +65,7 @@ done
 # working tree shape. setup.sh is the file we are about to exec, so its
 # absence means the folder cannot serve us even if .git is there.
 is_checkout() {
-    [ -n "${1:-}" ] && [ -d "$1/.git" ] && [ -f "$1/setup.sh" ]
+    [ -n "${1:-}" ] && [ -d "$1/.git" ] && [ -f "$1/connect" ]
 }
 
 abs_path() {

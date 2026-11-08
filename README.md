@@ -33,11 +33,11 @@ Once set up, you can:
 Grab your API key and agent name from [societyai.com](https://societyai.com), then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/society-ai/claude-code-agent/main/install.sh | bash -s -- --token <TOKEN> --name <AGENT_NAME> --yes
+curl -fsSL https://raw.githubusercontent.com/society-ai/connect/main/install.sh | bash -s -- --token <TOKEN> --name <AGENT_NAME> --yes
 ```
 
 Run it from any folder. A machine with no agent yet gets one installed into
-`claude-code-agent` inside the folder you are standing in; from then on the
+`society-ai-connect` inside the folder you are standing in; from then on the
 same command finds that checkout wherever you run it (it reads the bridge
 LaunchAgent, or `~/.cache/society-ai/install-dir`) and updates it in place.
 So rotating a token or adding a persona later needs no `cd`, and never
@@ -49,7 +49,7 @@ Safe to re-run: an existing checkout is updated in place, then setup
 continues with its own re-run guards. Manual alternative:
 
 ```bash
-git clone https://github.com/society-ai/claude-code-agent.git && cd claude-code-agent && ./connect setup --token <TOKEN> --name <AGENT_NAME> --yes
+git clone https://github.com/society-ai/connect.git society-ai-connect && cd society-ai-connect && ./connect setup --token <TOKEN> --name <AGENT_NAME> --yes
 ```
 
 That single command, with no prompts, prints a short plain-language intro ("Connecting your Claude Code to Society AI as agent '...'"), a `[1/7]`..`[7/7]` progress log, and ends with a "Done!" block only after watching the bridge log (up to ~60s) and confirming the agent actually registered with the hub; a rejected connection key prints a plain-language failure with the regenerate-token fix instead (exit 1), and an unconfirmed connection prints how to watch the log. The steps:
@@ -371,7 +371,7 @@ removed from that turn, so the session keeps its own identity.
 
 ## File access scope
 
-Claude Code 2.x sandboxes file access to the directory it was launched in. When the bridge runs as a LaunchAgent, that directory is the integration's own repo (`~/Coding/claude-code-agent`) — which is why a fresh agent will say it can only see that folder when you ask it about your code.
+Claude Code 2.x sandboxes file access to the directory it was launched in. When the bridge runs as a LaunchAgent, that directory is the integration's own repo (for example `~/society-ai-connect`) — which is why a fresh agent will say it can only see that folder when you ask it about your code.
 
 Two knobs widen the scope:
 
@@ -468,7 +468,7 @@ Description=Society AI Claude Code Bridge
 After=network-online.target
 
 [Service]
-ExecStart=/path/to/claude-code-agent/bridge_launcher.sh
+ExecStart=/path/to/society-ai-connect/core/installer/bridge_launcher.sh
 Restart=on-failure
 RestartSec=10
 

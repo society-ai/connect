@@ -34,7 +34,7 @@ setup:
     - kind: install_command
       title: Install the bridge
       text: owner-steps.md#install
-      value: curl -fsSL https://raw.githubusercontent.com/society-ai/claude-code-agent/main/install.sh | bash -s -- --token {token} --name {agent_name} --yes
+      value: curl -fsSL https://raw.githubusercontent.com/society-ai/connect/main/install.sh | bash -s -- --token {token} --name {agent_name} --yes
     - kind: autonomy_picker
       title: Choose what it may do on its own
       optional: true

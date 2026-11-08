@@ -153,7 +153,7 @@ if EXTRA_DIRS_RAW:
 API_HEADERS = {
     "Authorization": f"Bearer {SOCIETY_AI_AUTH_TOKEN}",
     "Content-Type": "application/json",
-    "User-Agent": f"claude-code-agent/{__version__}",
+    "User-Agent": f"society-ai-connect/{__version__}",
 }
 
 

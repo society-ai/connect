@@ -58,7 +58,7 @@ class Identity:
         return {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
-            "User-Agent": f"claude-code-agent/{config.__version__}",
+            "User-Agent": f"society-ai-connect/{config.__version__}",
         }
 
 

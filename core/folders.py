@@ -123,7 +123,7 @@ Do your work in those folders. You have full access to them, and their own
 CLAUDE.md instructions are loaded.
 
 (Written by the Society AI bridge; edits here are overwritten. Change the
-folders with ./connect status in the claude-code-agent folder.)
+folders with ./connect status in the Society AI Connect folder.)
 """
 
 

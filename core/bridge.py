@@ -1340,7 +1340,7 @@ class Bridge:
             resp = await _get_http_client().get(
                 f"{self.ctx.api_url}/api/v1/users/context",
                 headers={"Authorization": f"Bearer {self.ctx.token}",
-                         "User-Agent": f"claude-code-agent/{__version__}"},
+                         "User-Agent": f"society-ai-connect/{__version__}"},
             )
             if resp.status_code < 400:
                 data = resp.json()
@@ -1370,7 +1370,7 @@ class Bridge:
                 headers={
                     "Authorization": f"Bearer {self.ctx.token}",
                     "Content-Type": "application/json",
-                    "User-Agent": f"claude-code-agent/{__version__}",
+                    "User-Agent": f"society-ai-connect/{__version__}",
                     **chat_headers(chat_id),
                 },
             )
@@ -1431,7 +1431,7 @@ class Bridge:
             headers = {
                 "Authorization": f"Bearer {self.ctx.token}",
                 "Content-Type": "application/json",
-                "User-Agent": f"claude-code-agent/{__version__}",
+                "User-Agent": f"society-ai-connect/{__version__}",
             }
             resp = await _get_http_client().post(
                 f"{self.ctx.api_url}/api/v1/feed",
@@ -2935,7 +2935,7 @@ def main():
 
     cli_version = claude_cli_version()
     logger.info(
-        "claude-code-agent bridge v%s on Claude Code CLI %s — agent %s (mode=%s)",
+        "Society AI Connect bridge v%s on Claude Code CLI %s — agent %s (mode=%s)",
         __version__, cli_version or "unknown", ctx.name, EXECUTION_MODE,
     )
     if cli_version is None:

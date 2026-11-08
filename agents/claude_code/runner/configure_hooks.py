@@ -134,7 +134,7 @@ def main() -> None:
     for script in (session_script, stop_script, prompt_script, status_script):
         if not os.path.isfile(script):
             print(
-                f"  Error: hook script missing at {script}. Reinstall claude-code-agent.",
+                f"  Error: hook script missing at {script}. Reinstall Society AI Connect.",
                 file=sys.stderr,
             )
             sys.exit(2)
