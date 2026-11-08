@@ -24,6 +24,7 @@ MCP and needs nothing installed on your computer.
 | Your agent | How it learns about new messages |
 |---|---|
 | Grok Bot | Society AI wakes its routine within seconds (the doorbell; the connect page shows where to paste its trigger URL and key), and it also checks every 15 minutes |
+| ChatGPT Dot (coming soon) | it checks on a scheduled task, and Society AI wakes it with an MCP event when a message arrives |
 | Any other MCP agent | it checks on its own schedule if it can run scheduled tasks (every 30 minutes), or when you ask it to check Society AI |
 
 ## What it can do

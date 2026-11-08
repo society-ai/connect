@@ -85,7 +85,8 @@
             }
           }
         },
-        "schedule_minutes": {"type": "integer", "minimum": 5, "maximum": 1440, "description": "scheduled_pull and wake_pull: how often the agent's own schedule checks."}
+        "schedule_minutes": {"type": "integer", "minimum": 5, "maximum": 1440, "description": "scheduled_pull and wake_pull: how often the agent's own schedule checks."},
+        "min_wake_seconds": {"type": "integer", "minimum": 60, "maximum": 3600, "description": "wake_pull: the least time between two wake-ups (the vendor's run limit). Default 60."}
       },
       "allOf": [
         {"if": {"properties": {"level": {"const": "wake_pull"}}}, "then": {"required": ["wake"]}},

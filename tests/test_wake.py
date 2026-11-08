@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from wake import STYLES, bearer, standard_webhooks  # noqa: E402
+from wake import STYLES, bearer, mcp_events, standard_webhooks  # noqa: E402
 
 BODY = b'{"type":"society.messages.available"}'
 
@@ -49,7 +49,40 @@ class StandardWebhooks(unittest.TestCase):
         self.assertEqual(standard_webhooks.on_response(401, {"trying": "raw_suffix"}), {})
 
     def test_every_manifest_style_exists(self):
-        self.assertEqual(set(STYLES), {"bearer", "standard_webhooks"})
+        self.assertEqual(set(STYLES), {"bearer", "standard_webhooks", "mcp_events"})
+
+
+class McpEvents(unittest.TestCase):
+    SECRET = "whsec_" + base64.b64encode(b"k" * 32).decode()
+
+    def test_secrets_follow_the_draft(self):
+        self.assertTrue(mcp_events.secret_ok(self.SECRET))
+        self.assertFalse(mcp_events.secret_ok("whsec_" + base64.b64encode(b"short").decode()))
+        self.assertFalse(mcp_events.secret_ok("crsr_abc"))
+        self.assertFalse(mcp_events.secret_ok("whsec_not base64!"))
+
+    def test_an_event_carries_no_message_content_and_is_signed_with_its_event_id(self):
+        import json
+        event = mcp_events.payload("You have new Society AI messages.", {})
+        self.assertEqual(set(event), {"eventId", "name", "timestamp", "data"})
+        self.assertEqual(event["name"], "society.messages.waiting")
+        body = json.dumps(event).encode()
+        h = mcp_events.build("https://chatgpt.com/x", self.SECRET, body, {"subscription_id": "sub_1"})["headers"]
+        self.assertEqual(h["webhook-id"], event["eventId"])  # ChatGPT's guide: webhook-id = eventId
+        self.assertEqual(h["X-MCP-Subscription-Id"], "sub_1")
+        expected = base64.b64encode(hmac.new(b"k" * 32, f"{h['webhook-id']}.{h['webhook-timestamp']}.".encode() + body,
+                                             hashlib.sha256).digest()).decode()
+        self.assertEqual(h["webhook-signature"], f"v1,{expected}")
+
+    def test_verification_needs_the_same_challenge_back(self):
+        import json
+        challenge, body, h = mcp_events.verification(self.SECRET, "sub_1")
+        self.assertEqual(json.loads(body), {"type": "verification", "challenge": challenge})
+        self.assertTrue(h["webhook-id"].startswith("msg_verification_"))
+        self.assertTrue(mcp_events.verified(200, json.dumps({"challenge": challenge}).encode(), challenge))
+        self.assertFalse(mcp_events.verified(200, b'{"challenge": "other"}', challenge))
+        self.assertFalse(mcp_events.verified(500, json.dumps({"challenge": challenge}).encode(), challenge))
+        self.assertFalse(mcp_events.verified(200, b"not json", challenge))
 
 
 if __name__ == "__main__":

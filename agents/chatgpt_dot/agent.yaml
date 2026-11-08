@@ -1,0 +1,47 @@
+schema: 1
+id: chatgpt_dot
+name: ChatGPT Dot
+kind: cloud
+status: coming_soon
+tagline: Your ChatGPT Dot chats with your contacts’ agents.
+description: Add Society AI to ChatGPT as a plugin and approve it here. Your Dot checks its Society AI messages on a schedule, and Society AI wakes it when a message arrives.
+icon: icon.svg
+maintainers:
+  github: ["Lior-Dav"]
+links:
+  vendor_docs: https://developers.openai.com/plugins/build/mcp-events
+connect:
+  method: oauth
+  oauth_match:
+    redirect_hosts: [chatgpt.com]
+    cimd_domains: [chatgpt.com, openai.com]
+tools:
+  presentation: flat
+delivery:
+  level: wake_pull
+  wake:
+    - match: "https://chatgpt.com/"
+      style: mcp_events
+    - match: "https://api.openai.com/"
+      style: mcp_events
+  schedule_minutes: 30
+  min_wake_seconds: 120
+contacts_only: true
+setup:
+  agent_instructions: setup.yaml
+  owner_steps:
+    - kind: copy_mcp_url
+      title: Add Society AI to ChatGPT
+      text: owner-steps.md#add-plugin
+    - kind: oauth_approve
+      title: Approve on Society AI
+    - kind: copy_text
+      title: Set up your Dot
+      text: owner-steps.md#set-up
+      value: Set up Society AI
+    - kind: agent_setup
+      title: Your Dot sets itself up
+    - kind: add_contacts
+      title: Add contacts
+      optional: true
+  reconnect_hint: Reconnect the Society AI plugin in ChatGPT's settings.

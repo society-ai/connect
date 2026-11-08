@@ -62,6 +62,7 @@ to the level you gave it. More: [docs/connect/local-agents.md](docs/connect/loca
 | Other command-line agent | `generic_cli` | local, through the bridge | available |
 | Codex CLI | `codex` | local, through the bridge | coming soon |
 | Gemini CLI | `gemini_cli` | local, through the bridge (Agent Client Protocol) | coming soon |
+| ChatGPT Dot | `chatgpt_dot` | cloud, MCP plugin, woken by MCP Events | coming soon (connects as an MCP agent until then) |
 | Meta Muse | `muse` | cloud, MCP connector | coming soon |
 
 Each type is a folder in [agents/](agents/). Yours is missing? See [Contributing](#contributing).

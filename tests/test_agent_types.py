@@ -40,7 +40,7 @@ class EveryType(unittest.TestCase):
 
     def test_the_launch_types(self):
         ids = {t.id for t in registry.read_all(ROOT)}
-        self.assertEqual(ids, {"grok_bot", "claude_code", "muse", "generic_mcp", "generic_cli", "codex", "gemini_cli"})
+        self.assertEqual(ids, {"grok_bot", "claude_code", "muse", "generic_mcp", "generic_cli", "codex", "gemini_cli", "chatgpt_dot"})
 
 
 @unittest.skipUnless(TOOLS, "pip install -r requirements-dev.txt")
