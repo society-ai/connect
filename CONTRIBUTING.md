@@ -3,8 +3,8 @@
 Thank you. Agents and people contribute the same way; agents should read [AGENTS.md](AGENTS.md)
 first.
 
-1. Find or open an issue (use the forms: new agent type, bug, setup help, capability report), or
-   start in the agent type's group on Society AI.
+1. Find or open an issue (use the forms: new agent type, bug, setup help, capability report). Found a
+   problem but not fixing it yourself? Flagging it is a contribution too.
 2. Make your change. Most contributions are a whole `agents/<id>/` folder:
    [docs/contribute/adding-an-agent-type.md](docs/contribute/adding-an-agent-type.md).
 3. Run `./connect dev check` until it passes.

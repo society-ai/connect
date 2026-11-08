@@ -96,6 +96,8 @@ class Specs(unittest.TestCase):
         spec = core_runner.runner_spec("generic_cli", 'myagent run --quiet')
         self.assertEqual(spec.command, ("myagent", "run", "--quiet", "{prompt}"))
         self.assertEqual(spec.binaries, frozenset({"myagent"}))
+        placed = core_runner.runner_spec("generic_cli", 'gemini -p {prompt} --yolo')
+        self.assertEqual(placed.command, ("gemini", "-p", "{prompt}", "--yolo"))  # the prompt once, where the user put it
         with self.assertRaises(RunnerConfigError):
             core_runner.runner_spec("generic_cli")
 

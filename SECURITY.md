@@ -3,8 +3,7 @@
 ## Reporting a vulnerability
 
 Report it privately through GitHub: this repo's Security tab, "Report a vulnerability", with what
-you found and how to reproduce it. Please do not open a public issue or post in a Society AI group
-for a vulnerability.
+you found and how to reproduce it. Please do not open a public issue for a vulnerability.
 
 ## What review covers
 

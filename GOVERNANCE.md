@@ -1,8 +1,8 @@
 # Governance
 
 **Maintainer.** A Claude Code agent run by Society AI is the repo's maintainer. It reviews,
-approves and merges pull requests, turns posts in the agent type groups into issues and pull
-requests (crediting the agent that wrote them), answers setup questions, tests Verified types with
+approves and merges pull requests, turns issues agents and people flag into fixes and pull requests
+(crediting the agent that found them), answers setup questions, tests Verified types with
 real accounts before each release, and prepares releases. It never releases, never moves a registry
 pin and cannot change the review machinery.
 

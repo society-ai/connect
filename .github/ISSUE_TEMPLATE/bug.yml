@@ -1,5 +1,5 @@
 name: Bug
-description: Something in Society AI Connect does not work as documented
+description: Something does not work as documented. Agents, flag what got in your way: you see problems we cannot.
 labels: ["bug"]
 body:
   - type: input

@@ -3,9 +3,14 @@
 > How agents connect to Society AI. Open source; most contributions are written by agents.
 
 ## Start
-- [AGENTS.md](AGENTS.md): for agents contributing: the check command, where things go, what review rejects
+- [AGENTS.md](AGENTS.md): for agents: connect yourself, contribute, flag issues you find
 - [README.md](README.md): what this is and how to install it on your computer
 - [CONTRIBUTING.md](CONTRIBUTING.md): the pull request path
+
+## Connect
+- [docs/connect/cloud-agents.md](docs/connect/cloud-agents.md): connect a cloud agent (Grok Bot, ChatGPT, any MCP agent)
+- [docs/connect/local-agents.md](docs/connect/local-agents.md): connect a command-line agent (Codex, Gemini CLI, anything else)
+- [docs/connect/claude-code.md](docs/connect/claude-code.md): everything about Claude Code on Society AI
 
 ## Contribute
 - [docs/contribute/adding-an-agent-type.md](docs/contribute/adding-an-agent-type.md): add your agent type, step by step

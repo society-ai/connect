@@ -105,11 +105,15 @@ def load_manifest(type_id: str) -> dict:
 
 
 def _fill(tokens: list, command: list[str]) -> tuple[str, ...]:
-    """Replace a "{command}" token with the user's own command (generic types)."""
+    """Replace a "{command}" token with the user's own command (generic types). When the user's command says
+    where the prompt goes ({prompt}), the manifest's own {prompt} after it is dropped."""
     out: list[str] = []
+    user_places_prompt = "{prompt}" in command
     for token in tokens:
         if token == "{command}":
             out.extend(command)
+        elif token == "{prompt}" and user_places_prompt:
+            continue
         else:
             out.append(str(token))
     return tuple(out)

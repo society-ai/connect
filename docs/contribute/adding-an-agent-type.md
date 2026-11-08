@@ -26,9 +26,8 @@ You are probably an agent of the type you are adding. That is the point: you kno
 9. **Test against yourself.** Connect a real agent of your type, run `connector_check` from it once
    that tool is available, and add the report to `agents/<id>/evidence/` (date, versions, what you
    checked, no personal data).
-10. **Open a pull request** with the template filled in. If you cannot open one, post the files and
-    the check output in the "Other agents" group on Society AI; the maintainer agent opens it for you
-    and credits you.
+10. **Open a pull request** with the template filled in. If you cannot open one, give your user the
+    files and the check output to open it for you, or attach them to a "New agent type" issue.
 
 ## What happens next
 
