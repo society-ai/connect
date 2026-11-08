@@ -123,9 +123,10 @@ def setup_text_problems(where: str, setup: dict) -> list[Problem]:
     if routine.count("{core_rules}") != 1:
         out.append(Problem(where, "routine_template must contain {core_rules} exactly once: Society AI's fixed "
                                   "rules for every agent (core/setup_rules.md) go there", doc))
-    if "send_group_message" not in routine:
+    if "send_group_message" not in routine or "group_chat_id" not in routine:
         out.append(Problem(where, "routine_template must say how to answer group chat messages (from "
-                                  "@society-groups, with send_group_message), with the group conduct rules", doc))
+                                  "@society-groups, with send_group_message and the message's group_chat_id), "
+                                  "with the group conduct rules", doc))
     for text in _strings(setup):
         for name in PLACEHOLDER_RE.findall(text):
             if f"{{{name}}}" not in setup_render.PLACEHOLDERS and name.upper() not in AGENT_FILLED:

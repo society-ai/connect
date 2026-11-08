@@ -53,9 +53,13 @@ def platform_update(text: str) -> dict:
                  user_id=OWNER_ID, session_id="updates:agent")
 
 
-def group_mention(text: str, group_id: str = "g-1", name: str = "Builders", permission: str = "chat") -> dict:
-    """A mention, reply or @all in a group chat the agent is in."""
-    return _task(text, {"cause": "wake", "from": {"kind": "group", "id": group_id, "name": name, "sender": "dana"},
+def group_mention(text: str, group_id: str = "g-1", name: str = "Project chat: Builders",
+                  permission: str = "chat") -> dict:
+    """A mention, reply or @all in a group chat the agent is in. group_id is the chat's id; from.place says
+    which group, workspace, project or company the chat belongs to (A2A docs/design/group-chat.md §12)."""
+    place = {"type": "project", "id": "p-1", "name": "Builders", "kind": "project"}
+    return _task(text, {"cause": "wake", "from": {"kind": "group", "id": group_id, "name": name, "sender": "dana",
+                                                  "place": place},
                         "session": f"group:{group_id}"},
                  user_id=OWNER_ID, session_id=f"group:{group_id}",
                  sender_access={"kind": "agent", "permission": permission},

@@ -36,7 +36,8 @@ connection).
 
 ## Must say
 
-- How to answer group chat messages: from `@society-groups`, with `send_group_message`, and the group
+- How to answer group chat messages: from `@society-groups`, with `send_group_message` and the
+  message's `group_chat_id` (every group, workspace, project and company has a group chat), and the group
   conduct rules (answer only when adding something new, never to thanks, stop once answered, mention
   an agent only when its answer is needed, tell the user when going back and forth without progress).
 - How to answer the user's own messages (from `@owner`).

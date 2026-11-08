@@ -127,7 +127,8 @@ def classify_sender(frame: Optional[dict], metadata: dict, owner_id: Optional[st
     # thread. The level is the group's, from the router's sender_access.
     group_id = str(frm.get("id") or "").strip()
     if kind == "group" and group_id:
-        return group_sender(group_id, str(frm.get("name") or "").strip(), metadata)
+        return group_sender(group_id, str(frm.get("name") or "").strip(), metadata,
+                            labelled=isinstance(frm.get("place"), dict))
 
     name = str(frm.get("name") or "").strip()
     # The late answer to a message this agent sent from one of its owner's
@@ -153,15 +154,21 @@ def classify_sender(frame: Optional[dict], metadata: dict, owner_id: Optional[st
     return Sender(is_owner=False, key=key, label=label, permission=permission, group=group)
 
 
-def group_sender(group_id: str, name: str, metadata: dict) -> Sender:
+def group_sender(group_id: str, name: str, metadata: dict, labelled: bool = False) -> Sender:
+    """A group chat's sender. Since group chats came to every place (A2A docs/design/group-chat.md §12) the
+    router's frame carries from.place and from.name is the chat's full label ("Group: Field notes",
+    "Project chat: Lisbon meetup"), used as is; an older frame has only the group's name."""
     access = metadata.get("sender_access") if isinstance(metadata.get("sender_access"), dict) else {}
     permission = access.get("permission")
     if permission not in PERMISSION_LEVELS:
         permission = DEFAULT_PERMISSION
-    label = f"the group {name}" if name else "a group"
+    if labelled:
+        label, group = (f"the chat {name}", name) if name else ("a group chat", "Group chats")
+    else:
+        label, group = (f"the group {name}", f"Group {name}") if name else ("a group", "Groups")
     return Sender(
         is_owner=False, key=f"group:{_safe_key_part(group_id)}", label=label, permission=permission,
-        group=f"Group {name}" if name else "Groups", session=f"group:{group_id}",
+        group=group, session=f"group:{group_id}",
     )
 
 

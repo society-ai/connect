@@ -60,7 +60,7 @@ class Registry(unittest.TestCase):
         grok = next(t for t in self.reg["types"] if t["id"] == "grok_bot")
         self.assertTrue(grok["icon_svg"].startswith("<svg"))
         self.assertIn("add-connector", grok["owner_steps_text"])
-        self.assertEqual(grok["setup_file"]["version"], "2026-11-06.1")
+        self.assertEqual(grok["setup_file"]["version"], "2026-11-08.2")
         self.assertTrue(grok["hash"].startswith("sha256:"))
         self.assertEqual(self.reg["core_rules"], registry.core_rules(ROOT))
         json.dumps(self.reg)  # serialisable
@@ -89,7 +89,7 @@ class SetupRender(unittest.TestCase):
     def test_core_rules_and_version_are_filled_and_the_agents_own_braces_kept(self):
         routine = self.render()["routine_template"]
         self.assertIn(self.rules, routine)
-        self.assertIn('routine_version="2026-11-06.1"', routine)
+        self.assertIn('routine_version="2026-11-08.2"', routine)
         self.assertIn("{ROUTING_LIST}", routine)
         self.assertNotIn("{core_rules}", routine)
 

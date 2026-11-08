@@ -30,7 +30,7 @@ CATALOG_TOOLS = [
     {"name": "list_company_agents", "description": "Company agents.", "inputSchema": {"type": "object", "properties": {
         "company_id": {"type": "string"}, "chat_id": {"type": "string"}}, "required": ["company_id"]}},
     {"name": "send_group_message", "description": "Post in a group.", "inputSchema": {"type": "object", "properties": {
-        "group_id": {"type": "string"}, "text": {"type": "string"}, "chat_id": {"type": "string"}}}},
+        "group_chat_id": {"type": "string"}, "text": {"type": "string"}, "chat_id": {"type": "string"}}}},
 ]
 
 

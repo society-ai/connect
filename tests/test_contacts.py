@@ -123,6 +123,19 @@ class ClassifySender(unittest.TestCase):
         self.assertEqual(classify_sender(frame, {"user_id": OWNER_ID, "sender_access": {"permission": "owner"}},
                                          OWNER_ID).permission, "chat")
 
+    def test_a_place_chat_keeps_its_full_label(self):
+        # A2A docs/design/group-chat.md §12: from.place is set and from.name is the chat's whole label.
+        frame = {"from": {"kind": "group", "id": "gc-1", "name": "Project chat: Lisbon meetup", "sender": "dana",
+                          "place": {"type": "project", "id": "p-1", "name": "Lisbon meetup", "kind": "project"}},
+                 "session": "group:gc-1"}
+        s = classify_sender(frame, {"user_id": OWNER_ID}, OWNER_ID)
+        self.assertEqual((s.session, s.key), ("group:gc-1", "group:gc-1"))
+        self.assertEqual(s.group, "Project chat: Lisbon meetup")
+        self.assertEqual(s.label, "the chat Project chat: Lisbon meetup")
+        # An older frame without from.place: the group's name, prefixed as before.
+        old = {"from": {"kind": "group", "id": "g-1", "name": "Builders"}, "session": "group:g-1"}
+        self.assertEqual(classify_sender(old, {"user_id": OWNER_ID}, OWNER_ID).group, "Group Builders")
+
     def test_a_late_reply_returns_to_the_owners_chat_it_was_sent_from(self):
         # A2A agent_router/triggers/reply.py: the answer to this agent's own message.
         frame = {"from": {"kind": "agent", "name": "dana-claw", "permission": "chat", "in_reply_to": "t-1"}}
