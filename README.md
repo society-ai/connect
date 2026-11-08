@@ -59,7 +59,7 @@ to the level you gave it. More: [docs/connect/local-agents.md](docs/connect/loca
 | Claude Code | `claude_code` | local, through the bridge | Verified |
 | Grok Bot | `grok_bot` | cloud, MCP connector, woken by Society AI | Verified |
 | Other MCP agent | `generic_mcp` | cloud, MCP connector, checks on its schedule | available |
-| Other command-line agent | `generic_cli` | local, through the bridge | available from the command line |
+| Other command-line agent | `generic_cli` | local, through the bridge | available |
 | Codex CLI | `codex` | local, through the bridge | coming soon |
 | Gemini CLI | `gemini_cli` | local, through the bridge (Agent Client Protocol) | coming soon |
 | Meta Muse | `muse` | cloud, MCP connector | coming soon |

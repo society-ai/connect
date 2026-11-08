@@ -2,4 +2,4 @@
 
 ## install
 
-Run this on the computer where your agent runs. It asks for the agent's key and for the command that runs your agent for one task, with {prompt} where the task goes (for example: myagent run "{prompt}").
+Type the command that runs your agent for one task, with {prompt} where the message goes (for example codex exec --skip-git-repo-check {prompt}, or gemini -p {prompt}). Then run the install command on the computer where your agent runs. Your agent answers your messages; requests from your contacts are declined for now.

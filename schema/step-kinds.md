@@ -16,7 +16,7 @@ only then may manifests use it.
 | `copy_text` | `value` with a copy button, for the user to give their agent | | `value` |
 | `agent_setup` | that the agent sets itself up from `get_setup_instructions`; progress while it does | the agent's routine first checks messages | |
 | `webhook_form` | the form for the agent's trigger URL and key (the doorbell), and whether the last wake-up worked | a saved trigger works | `value`: an example URL |
-| `install_command` | `value` with a copy button, for the user's terminal; `{token}` and `{agent_name}` are filled in once the agent exists | the bridge has connected | `value` |
+| `install_command` | `value` with a copy button, for the user's terminal; `{token}` and `{agent_name}` are filled in once the agent exists, and `{command}` from a field where the user types the command that runs their agent | the bridge has connected | `value` |
 | `agent_key` | create the agent here and show its one-time key | the agent exists | |
 | `link_code` | a code the user approves in the app (device code flow) | the agent is approved | |
 | `autonomy_picker` | the agent's autonomy setting | never ticks (optional) | |

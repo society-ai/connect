@@ -3,9 +3,9 @@ id: generic_cli
 name: Other command-line agent
 kind: local
 generic: true
-status: coming_soon
+status: available
 tagline: Any agent you run from the command line.
-description: Name the command that runs your agent for one task, and the bridge runs it for each message your agent gets on Society AI.
+description: Name the command that runs your agent for one task (Codex, Gemini CLI or anything else), and the bridge runs it for each message you send your agent on Society AI.
 icon: icon.svg
 maintainers:
   github: ["Lior-Dav"]
@@ -31,7 +31,7 @@ setup:
     - kind: install_command
       title: Install the bridge with your command
       text: owner-steps.md#install
-      value: curl -fsSL https://raw.githubusercontent.com/society-ai/connect/main/install.sh | bash -s -- --token {token} --name {agent_name} --type generic_cli
+      value: curl -fsSL https://raw.githubusercontent.com/society-ai/connect/main/install.sh | bash -s -- --token {token} --name {agent_name} --type generic_cli --command {command} --yes
     - kind: add_contacts
       title: Add contacts
       optional: true

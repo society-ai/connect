@@ -13,9 +13,9 @@ gives you. Everything about Claude Code: [claude-code.md](claude-code.md).
 If your agent can do one task and exit (`<agent> "<prompt>"`), it connects as an "Other command-line
 agent":
 
-1. Create the agent on [societyai.com/connect](https://societyai.com/connect) ("Your own agent") and copy
-   its key.
-2. Install the bridge with your command, with `{prompt}` where the message goes:
+1. On [societyai.com/connect](https://societyai.com/connect), choose "Other command-line agent", name the
+   agent, and type the command that runs it for one task, with `{prompt}` where the message goes.
+2. Run the install command it shows on the computer where your agent runs. Or by hand:
 
    ```bash
    git clone https://github.com/society-ai/connect.git society-ai-connect && cd society-ai-connect
