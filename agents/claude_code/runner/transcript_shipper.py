@@ -21,7 +21,15 @@ resumed turn) are already in the chat; their user entry ships marked as a chat
 echo so the chat does not show them twice.
 
 WHAT ships is a security boundary: the conversation only, meaning
-user/dispatch text, assistant text and summaries. Claude Code's own tool
+user/dispatch text, assistant text and summaries, plus the instructions of a
+skill the agent loads (its SKILL.md text, which Claude Code adds to the
+conversation for the model): those ship as a `skill` entry, shown in the chat
+as the agent's, never as the owner's message. A message from another Claude
+session on the machine ships as a `peer` entry with that session's name.
+Society AI's own relay and channel events carry the owner's app messages and
+ship as before; Claude Code's other notes to the model stay local. The Society AI banner the
+agent puts at the top of a reply is for the Claude Code app and is cut from
+the text that ships. Claude Code's own tool
 activity (Bash, Read, Edit, Grep, WebFetch, ...: names, targets, inputs,
 results), thinking, attachments and internal records NEVER leave the
 machine; that's where secrets live (env output, file contents, tokens in
@@ -109,16 +117,38 @@ _RELAY_RE = re.compile(
 )
 
 
+# The first line of the Society AI blockquote the agent shows at the top of a reply
+# (the SessionStart identity banner, the first-message mirror line).
+_BANNER_FIRST_LINES = (
+    "> ⚡ **Society AI**",
+    "> 🪞 Mirrored and tracked on Society AI",
+    "> 🔒 Not mirrored",
+)
+
+
+def strip_banner(text: str) -> str:
+    """The reply without the Society AI blockquote at its top: the banner is for
+    the Claude Code app, the chat on Society AI does not need it."""
+    lines = text.lstrip("\n").split("\n")
+    if not lines or not lines[0].startswith(_BANNER_FIRST_LINES):
+        return text
+    i = 0
+    while i < len(lines) and lines[i].startswith(">"):
+        i += 1
+    return "\n".join(lines[i:]).strip()
+
+
 def chat_echo(text: str) -> str:
     """A user entry the app already holds: the projection into the chat skips it
     and the agent's reply to it (the reply is saved by the chat already)."""
     return f'<channel source="society-ai" kind="chat" via="app">\n{text}\n</channel>'
 
 
-def _shippable_entries(record: dict) -> list[dict]:
+def _shippable_entries(record: dict, skills: Optional[dict] = None) -> list[dict]:
     """Project one raw transcript record into zero or more shippable
     entries. Deterministic — same record always
-    yields the same entries in the same order."""
+    yields the same entries in the same order. `skills` maps a Skill tool
+    call's id to the skill's name (from its result, the line before)."""
     rtype = record.get("type")
 
     if rtype == "summary":
@@ -138,6 +168,30 @@ def _shippable_entries(record: dict) -> list[dict]:
         text = "\n".join(t for t in texts if t.strip()).strip()
         if not text:
             return []
+        if record.get("isMeta"):
+            # Text Claude Code put in front of the model, never typed by the owner.
+            origin = record.get("origin") if isinstance(record.get("origin"), dict) else {}
+            kind = origin.get("kind")
+            name = (skills or {}).get(record.get("sourceToolUseID"))
+            if name:
+                # A skill the agent loaded: its instructions, the agent's.
+                return [{"entry_type": "skill", "content": {"name": _clip(name, 200), "text": _trim(text)}}]
+            if kind == "peer" and origin.get("name") != "Society AI":
+                # A message from another Claude session on this machine, labelled with it.
+                body = origin.get("body") if isinstance(origin.get("body"), str) else ""
+                if not body:
+                    m = re.search(r"<cross-session-message[^>]*>\n?(.*?)\n?</cross-session-message>", text, re.S)
+                    body = m.group(1) if m else ""
+                if not body.strip():
+                    return []
+                return [{"entry_type": "peer", "content": {
+                    "name": _clip(origin.get("name") or "another session", 200), "text": _trim(body.strip()),
+                }}]
+            if kind not in ("peer", "channel"):
+                # Command caveats, reminders and the like stay on the machine. Society AI's
+                # relay (peer "Society AI") and channel events go on below: they carry the
+                # owner's messages from the app, which ship as chat echoes.
+                return []
         relayed = _RELAY_RE.search(text)
         if relayed:
             # The owner's message from the app, carried in by the Haiku relay.
@@ -151,15 +205,16 @@ def _shippable_entries(record: dict) -> list[dict]:
             for b in content:
                 if not isinstance(b, dict):
                     continue
-                if b.get("type") == "text" and (b.get("text") or "").strip():
+                text = strip_banner(b.get("text") or "") if b.get("type") == "text" else ""
+                if text.strip():
                     out.append({
                         "entry_type": "assistant",
-                        "content": {"text": _trim(b["text"])},
+                        "content": {"text": _trim(text)},
                     })
                 # tool_use blocks (Claude Code's own tools) and thinking
                 # blocks never ship.
-        elif isinstance(content, str) and content.strip():
-            out.append({"entry_type": "assistant", "content": {"text": _trim(content)}})
+        elif isinstance(content, str) and strip_banner(content).strip():
+            out.append({"entry_type": "assistant", "content": {"text": _trim(strip_banner(content))}})
         return out
 
     # Everything else (queue-operation, attachment, mode, last-prompt,
@@ -195,6 +250,9 @@ class TranscriptShipper:
         # session_id -> texts the owner sent from the app as a resumed turn,
         # not yet seen in the transcript (marked as chat echoes when they are).
         self._app_turns: dict[str, list[str]] = {}
+        # Skill tool call id -> skill name, from the call's result, so the skill's
+        # instructions (the next line) ship as a named `skill` entry.
+        self._skill_names: dict[str, str] = {}
 
     # -- registry --------------------------------------------------------------
 
@@ -396,11 +454,24 @@ class TranscriptShipper:
         ts = record.get("timestamp")
         ts = ts[:64] if isinstance(ts, str) and ts else None
 
-        out = _shippable_entries(record)
+        self._remember_skill(record)
+        out = _shippable_entries(record, self._skill_names)
         if ts:
             for e in out:
                 e["ts"] = ts
         return out
+
+    def _remember_skill(self, record: dict) -> None:
+        """A Skill tool result names the skill it launched (toolUseResult.commandName)."""
+        result = record.get("toolUseResult")
+        if record.get("type") != "user" or not isinstance(result, dict) or not result.get("commandName"):
+            return
+        content = (record.get("message") or {}).get("content")
+        for b in content if isinstance(content, list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id"):
+                self._skill_names[str(b["tool_use_id"])] = str(result["commandName"])
+        while len(self._skill_names) > MAX_TRACKED_SESSIONS:
+            self._skill_names.pop(next(iter(self._skill_names)))
 
     async def _post_batch(
         self, session_id: str, meta: dict, entries: list[dict], *, status: Optional[str]
