@@ -322,21 +322,31 @@ This is fixed, not a setting.
 
 ### Session Trackers
 
-When you turn on **Track my sessions** in the app's Settings (off by default, with Claude Code
-ticked), the bridge also keeps a short **Tracker** for every Claude Code session on this computer, including sessions you start yourself in Claude Code: its status, open
-questions, approvals, checklist and unfinished work (branch, uncommitted files, unpushed commits).
-Each one shows on the session's chat page in Society AI and in the Sessions list.
+When you turn on **Track my sessions** in the app's Settings (off by default), Society AI keeps a
+short **Tracker** for every session and chat with your agents: its status, open questions,
+approvals, checklist and unfinished work (branch, uncommitted files, unpushed commits). Each one
+shows on the session's chat page in Society AI and in the Sessions list. In Settings you choose
+**where Trackers run** (one place: Claude Code today) and whether **sessions you start in Claude
+Code** are included, with folders to skip.
 
-- One bridge per computer does it (whichever holds `~/.cache/society-ai/tracker/runner.lock`).
-- After each turn it reads the new part of the transcript here, keeps only the conversation (never
-  tool activity or thinking), and runs a small model (`claude -p` with Claude Haiku, no tools, no
-  MCP, no settings, nothing saved). That model run uses your **Agent SDK credits**.
-- Only the Tracker is sent, written as the hidden Tracker agent of the session's agent's account
-  (a token of its own per agent, kept in `~/.cache/society-ai/tracker/identities.json`), so agents
-  of different accounts on this computer each get Trackers in their own account. The conversation
-  of a session you started yourself is never sent.
-- Each account's setting decides for that account's agents. `TRACKING=false` here turns it off on
-  this computer whatever the setting says.
+- **Sessions you start in Claude Code** are saved to Society AI as chats so they can be tracked:
+  your messages and the agent's replies, never tool activity, file contents or thinking. A session
+  is registered at your **first message** (not when you open it), and the agent's first reply says
+  so in its Society AI banner, with a link to the session's chat: `🪞 Mirrored and tracked on
+  Society AI · Open this session`. A session in a skipped folder says `🔒 Not mirrored` and stays
+  here. To stop one session, ask the agent ("don't mirror this session", its `stop_session_mirror`
+  tool) or press **Stop mirroring** on its chat page; its later turns stay on this computer.
+- **Facts from this computer:** one bridge per computer (whichever holds
+  `~/.cache/society-ai/tracker/runner.lock`) sends each session's checklist, git state and whether
+  it is running after each turn. No model runs for this.
+- **When Trackers run on Claude Code:** that bridge asks Society AI for Tracker jobs (sessions with
+  a new reply), runs each with a small model (`claude -p` with Claude Haiku, no tools, no MCP, no
+  settings, nothing saved) and sends the result back. That model run uses **your Claude plan**.
+  The job's text comes from what Society AI already holds, never from this computer's transcripts.
+- Trackers are written as the hidden Tracker agent of the session's agent's account (a token of
+  its own per agent, kept in `~/.cache/society-ai/tracker/identities.json`), so agents of different
+  accounts on this computer each get Trackers in their own account, under that account's setting.
+- `TRACKING=false` here turns it off on this computer whatever the setting says.
 
 **Replying from Society AI.** A session you started yourself in Claude Code has no Society AI
 channel, so a message you send from its chat page goes another way:
@@ -386,7 +396,7 @@ All configuration is via environment variables (set in `.env`):
 | `SOCIETY_AI_HOME` | No | `~/Society AI` | Where agents' own folders and session folders live (see [Where sessions show up](#where-sessions-show-up)) |
 | `OWNER_NAME` | No | profile name, else email | Your name in the sidebar group of your conversations |
 | `MIRROR_CONTACTS` | No | `false` | Also record conversations with contacts to Society AI |
-| `TRACKING` | No | `true` | Keep a Tracker for every Claude Code session on this computer (see [Session Trackers](#session-trackers)); also off when `MIRROR=false` |
+| `TRACKING` | No | `true` | Take part in Track my sessions on this computer: mirror and track the sessions you start in Claude Code, and run Trackers when they run on Claude Code (see [Session Trackers](#session-trackers)); also off when `MIRROR=false` |
 | `EXTRA_DIRS` | No | — | Comma-separated additional dirs the agent can read/write (see [File access scope](#file-access-scope)) |
 | `CONTACT_PERMISSION_LIMIT` | No | `act` | The most this agent may do for any contact on this computer: `chat`, `read` or `act` (see [Contacts and permissions](#contacts-and-permissions)) |
 | `MAX_CONCURRENT_TASKS` | No | `3` | Max parallel Claude Code sessions |

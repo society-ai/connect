@@ -1906,6 +1906,40 @@ class Bridge:
                 )
                 return
 
+    async def ipc_session_start(self, params: dict) -> Optional[dict]:
+        """IPC from the UserPromptSubmit hook at a session's first message:
+        register it if it is to be mirrored and tracked, and answer the banner
+        facts (D37). None unless this bridge is the machine's tracking runner,
+        so the hook takes the one real answer."""
+        if self._tracker is None:
+            return None
+        try:
+            return await self._tracker.session_start(params)
+        except Exception:
+            logger.exception("session_start failed")
+            return None
+
+    def _adopt_direct_session(self, session_id: str, params: dict) -> None:
+        """Register a mirrored direct session with this bridge's shipper when the
+        tracking runner (any bridge on this machine) recorded it for this agent."""
+        if self._shipper is None or self._shipper.is_registered(session_id):
+            return
+        from agents.claude_code.runner import session_tracker as trk
+        try:
+            data = json.loads((trk.BASE_DIR / "state.json").read_text())
+        except (OSError, ValueError):
+            return
+        st = (data.get("sessions") or {}).get(session_id) or {}
+        if not st.get("mirrored") or st.get("agent") != self.ctx.name:
+            return
+        self._shipper.register(
+            session_id,
+            cwd=str(params.get("cwd") or st.get("cwd") or ""),
+            work_item_kind="direct",
+            chat_id=str(st.get("chat_id") or ""),
+        )
+        logger.info("Mirroring session %s started in Claude Code", session_id[:8])
+
     async def ipc_mirror_notify(self, params: dict) -> dict:
         """IPC from the Stop hook: a Claude Code turn ended on this machine.
         Ships the delta if the session is one the bridge launched; silently
@@ -1923,6 +1957,10 @@ class Bridge:
             waiter = self._direct_turn_events.get(session_id)
             if waiter is not None:
                 waiter.set()
+
+        # A session the owner started in Claude Code, for this agent, that the
+        # platform said is mirrored and tracked (D36, D37): ship it from now on.
+        self._adopt_direct_session(session_id, params)
 
         # Hook traffic IS session activity. Locally-typed turns never pass
         # through a dispatch, and before this the idle reaper counted them
@@ -2399,6 +2437,9 @@ class Bridge:
         try:
             if live is None:
                 report("received")
+                if self._shipper is not None:
+                    # Already in the chat: its mirrored copy must not show twice.
+                    self._shipper.expect_app_turn(session.session_id, content)
                 text = await dr.ask_closed_session(session, content, mode, timeout_s)
                 await self._send_task_complete(
                     task_id, text or "(no reply)", exit_code=0)
@@ -3039,6 +3080,7 @@ def main():
     ipc = bridge_ipc.IPCServer(
         handlers={
             "mirror_notify": bridge.ipc_mirror_notify,
+            "session_start": bridge.ipc_session_start,
             "status": bridge.ipc_status,
             "reap_session": bridge.ipc_reap_session,
             "reopen_session": bridge.ipc_reopen_session,

@@ -8,9 +8,17 @@ appends entries idempotently on (session, seq), so re-shipping after a crash
 or retry is a no-op.
 
 Scope: only sessions the bridge *registered* are shipped. Stop-hook
-notifications for unknown session ids are ignored — a machine owner's own
-desktop/terminal sessions are never mirrored unless a later opt-in
-(observe tier) registers them. MIRROR=false disables shipping entirely.
+notifications for unknown session ids are ignored. A session the owner
+started in Claude Code is registered (work_item_kind 'direct') only when the
+platform said it is mirrored and tracked (session-trackers D36, D37): the
+owner tracks sessions started in Claude Code and its folder is not skipped.
+It then ships from the start of its transcript. A batch refused because the
+owner stopped mirroring it (409, D41) makes the shipper forget the session.
+MIRROR=false disables shipping entirely.
+
+Turns the owner sent from the app into such a session (the Haiku relay, or one
+resumed turn) are already in the chat; their user entry ships marked as a chat
+echo so the chat does not show them twice.
 
 WHAT ships is a security boundary: the conversation only, meaning
 user/dispatch text, assistant text and summaries. Claude Code's own tool
@@ -96,6 +104,17 @@ def _clip(s: Any, n: int = 200) -> str:
     return s[:n]
 
 
+_RELAY_RE = re.compile(
+    r'<cross-session-message[^>]*from-name="Society AI"[^>]*>\n?(.*?)\n?</cross-session-message>', re.S,
+)
+
+
+def chat_echo(text: str) -> str:
+    """A user entry the app already holds: the projection into the chat skips it
+    and the agent's reply to it (the reply is saved by the chat already)."""
+    return f'<channel source="society-ai" kind="chat" via="app">\n{text}\n</channel>'
+
+
 def _shippable_entries(record: dict) -> list[dict]:
     """Project one raw transcript record into zero or more shippable
     entries. Deterministic — same record always
@@ -119,6 +138,10 @@ def _shippable_entries(record: dict) -> list[dict]:
         text = "\n".join(t for t in texts if t.strip()).strip()
         if not text:
             return []
+        relayed = _RELAY_RE.search(text)
+        if relayed:
+            # The owner's message from the app, carried in by the Haiku relay.
+            text = chat_echo(relayed.group(1).strip())
         return [{"entry_type": "user", "content": {"text": _trim(text)}}]
 
     if rtype == "assistant":
@@ -145,6 +168,13 @@ def _shippable_entries(record: dict) -> list[dict]:
     return []
 
 
+def _stopped(response: httpx.Response) -> bool:
+    try:
+        return bool((response.json() or {}).get("stopped"))
+    except ValueError:
+        return False
+
+
 class TranscriptShipper:
     """Per-bridge shipper. One instance per persona/bridge process."""
 
@@ -162,6 +192,9 @@ class TranscriptShipper:
         self._state: dict[str, dict] = self._load_state()
         self._locks: dict[str, asyncio.Lock] = {}
         self._client: Optional[httpx.AsyncClient] = None
+        # session_id -> texts the owner sent from the app as a resumed turn,
+        # not yet seen in the transcript (marked as chat echoes when they are).
+        self._app_turns: dict[str, list[str]] = {}
 
     # -- registry --------------------------------------------------------------
 
@@ -215,6 +248,19 @@ class TranscriptShipper:
 
     def is_registered(self, session_id: str) -> bool:
         return session_id in self._state
+
+    def expect_app_turn(self, session_id: str, text: str) -> None:
+        """The owner's message from the app is about to run as a turn in this
+        session (a closed session resumed for one reply): its user entry ships
+        as a chat echo, since the chat already shows it and its reply."""
+        if text.strip():
+            self._app_turns.setdefault(session_id, []).append(text.strip())
+
+    def forget(self, session_id: str) -> None:
+        """Stop shipping a session (its mirroring was stopped, D41)."""
+        if self._state.pop(session_id, None) is not None:
+            self._save_state()
+        self._app_turns.pop(session_id, None)
 
     # -- shipping ---------------------------------------------------------------
 
@@ -322,10 +368,16 @@ class TranscriptShipper:
         complete = blob[: last_nl + 1]
 
         entries: list[dict] = []
+        expected = self._app_turns.get(session_id) or []
         for raw in complete.split(b"\n"):
             if not raw.strip():
                 continue
             for partial in self._line_entries(raw):
+                if expected and partial["entry_type"] == "user":
+                    text = str((partial.get("content") or {}).get("text") or "").strip()
+                    if text in expected:
+                        expected.remove(text)
+                        partial["content"] = {"text": _trim(chat_echo(text))}
                 partial["seq"] = seq
                 entries.append(partial)
                 seq += 1
@@ -375,6 +427,12 @@ class TranscriptShipper:
                 f"{self._api_url}/api/v1/session-mirror", json=body,
                 headers=chat_headers(meta.get("chat_id") or meta.get("dispatch_chat_id")),
             )
+            if r.status_code == 409 and _stopped(r):
+                # The owner stopped mirroring this session (D41): later turns
+                # stay on this machine.
+                logger.info("mirroring stopped for %s; no longer shipped", session_id[:8])
+                self.forget(session_id)
+                return False
             if r.status_code >= 400:
                 logger.warning(
                     "mirror ship rejected for %s: %s %s",

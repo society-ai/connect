@@ -92,8 +92,8 @@ class ProxyTest(unittest.TestCase):
 class ListsTheCatalog(ProxyTest):
     def test_local_tools_then_the_agents_catalog(self):
         names = self.names()
-        self.assertEqual(names[:3], ["switch_agent", "upload_file", "download_file"])
-        self.assertEqual(names[3:], ["list_tasks", "list_company_agents", "send_group_message"])
+        self.assertEqual(names[:4], ["switch_agent", "upload_file", "download_file", "stop_session_mirror"])
+        self.assertEqual(names[4:], ["list_tasks", "list_company_agents", "send_group_message"])
         sent = self.catalog.sent[0]
         self.assertEqual(sent["url"], "https://mcp.societyai.com/mcp")
         self.assertEqual(sent["headers"]["Authorization"], "Bearer sai_jenkins")
@@ -119,7 +119,7 @@ class ListsTheCatalog(ProxyTest):
 
     def test_an_unreachable_catalog_still_lists_the_local_tools(self):
         self.catalog.status = 502
-        self.assertEqual(self.names(), ["switch_agent", "upload_file", "download_file"])
+        self.assertEqual(self.names(), ["switch_agent", "upload_file", "download_file", "stop_session_mirror"])
 
 
 class CallsTheCatalog(ProxyTest):

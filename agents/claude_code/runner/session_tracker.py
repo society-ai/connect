@@ -1,24 +1,31 @@
-"""Session Tracker runner: keeps a short, current Tracker for every Claude Code
-session on this machine (Society AI design: docs/design/session-trackers.md §8).
+"""Session Tracker runner: the machine side of Society AI's session Trackers
+(Society AI design: docs/design/session-trackers.md §8, §16).
 
-How it works:
-- The user-level Stop and UserPromptSubmit hooks already tell every running
-  bridge about every session's turns (mirror_notify). One bridge per machine
-  holds ~/.cache/society-ai/tracker/runner.lock and does the tracking; the
-  others ignore it.
-- After a turn ends the runner waits a few seconds (the final answer is
-  flushed to the transcript after the hook fires), reads only the new part of
-  the transcript (conversation text only; tool calls, results and thinking
-  never leave the machine), snapshots git state, and asks a small model
-  (claude -p, Haiku, no tools, no MCP, no settings, no saved session) for a
-  patch against the current Tracker. The prompt, schema and model come from
-  the platform (runner-config), so behaviour changes without a release.
+What it does on this machine:
+- The user-level hooks tell every running bridge about every session's turns
+  (mirror_notify) and, at a session's first message, ask to register it
+  (session_start). One bridge per machine holds
+  ~/.cache/society-ai/tracker/runner.lock and does the tracking; the others
+  ignore it.
+- Registers sessions: a session started in Claude Code is registered at its
+  first message when its owner tracks sessions started in Claude Code and its
+  folder is not skipped; the platform creates its chat and the agent's bridge
+  then mirrors its conversation (D36, D37). The answer, with the chat link,
+  goes back to the hook for the banner line.
+- Sends facts after each prompt and turn end, without a model: running,
+  activity, turn count, the checklist from Claude Code's task tools, git state
+  and the Jump in link (§16.5).
+- Runs Trackers when this machine's runtime (Claude Code) is the one the owner
+  chose: it asks the server for jobs, runs each with a small model (claude -p,
+  Haiku, no tools, no MCP, no settings, no saved session) and sends the output
+  back (§16.4). The server builds the input from the stored conversation, so
+  the model never reads a local transcript, and owns the prompt and schema.
 - Each session belongs to one agent on this machine: the persona whose bridge
   started it, else the agent the session bound itself to, else the machine's
-  default agent (D19, D20). Its Tracker is written as that agent's owner's
-  hidden Tracker agent, whose token the runner asks for once, with that
-  persona's own agent token. So agents of different Society AI accounts on one
-  machine each get Trackers in their own account (D33).
+  default agent (D19, D20). It is written as that agent's owner's hidden
+  Tracker agent, whose token the runner asks for once, with that persona's own
+  agent token. So agents of different Society AI accounts on one machine each
+  get Trackers in their own account (D33).
 
 Off when TRACKING=false or MIRROR=false locally. Each account's "Track my
 sessions" setting in the app decides for that account's sessions.
@@ -57,19 +64,19 @@ PROMPT_DELAY_S = 1.5
 CONFIG_REFRESH_S = 600.0
 LOCK_RETRY_S = 60.0
 MODEL_TIMEOUT_S = 120.0
-TEXT_CAP = 24_000           # chars of conversation per job, newest kept
 MESSAGE_CAP = 4_000         # chars per message
 MAX_SESSIONS = 500          # remembered sessions (oldest dropped)
+RECHECK_S = 600.0           # a session not tracked is asked about again after this
+FEED_POLL_S = 20.0          # how often to ask for Tracker jobs
+FEED_AFTER_TURN_S = 8.0     # ask soon after a turn ends on this machine
+FEED_MAX_JOBS = 3
+RUNTIME = "claude_code"
 
 _NOISE_PREFIXES = (
     "<system-reminder>", "<task-notification>", "<command-", "<local-command",
     "<user-prompt-submit-hook>", "Caveat:",
 )
 _TASK_STATES = {"pending": "todo", "in_progress": "in_progress", "completed": "done"}
-_KIND_LETTERS = {
-    "question": "q", "approval": "a", "decision": "d", "constraint": "c",
-    "follow_up": "f", "note": "n",
-}
 
 
 # ── Transcript reading (pure, tested) ─────────────────────────────────────
@@ -200,70 +207,6 @@ def extract_segment(records: list[dict]) -> Segment:
     return seg
 
 
-def render_turns(turns: list[tuple[str, str]], cap: int = TEXT_CAP) -> str:
-    """Newest turns that fit in `cap` characters, oldest first."""
-    out: list[str] = []
-    size = 0
-    for who, text in reversed(turns):
-        line = f"{who}: {text}"
-        if size + len(line) > cap and out:
-            break
-        out.append(line[:cap])
-        size += len(line)
-    return "\n\n".join(reversed(out))
-
-
-def render_tracker(tracker: dict, items: list[dict]) -> tuple[str, dict[str, str]]:
-    """The CURRENT TRACKER block and the short-id map ({q1: item uuid})."""
-    lines = [f"CURRENT TRACKER (version {tracker.get('version', 0)}):"]
-    for key, label in (("title", "title"), ("goal", "goal"), ("state", "state"),
-                       ("nextStep", "next_step"), ("status", "status"), ("waitingOn", "waiting_on")):
-        if tracker.get(key):
-            lines.append(f"{label}: {tracker[key]}")
-    short: dict[str, str] = {}
-    counts: dict[str, int] = {}
-    open_lines = []
-    for it in items:
-        letter = _KIND_LETTERS.get(it.get("kind", ""))
-        if not letter:
-            continue  # steps belong to the hooks, not the model
-        counts[letter] = counts.get(letter, 0) + 1
-        sid = f"{letter}{counts[letter]}"
-        short[sid] = it["id"]
-        flags = [it["kind"], it.get("state", "")]
-        if it.get("blocking"):
-            flags.append("blocking")
-        extra = f" (action: {it['action']})" if it.get("action") else ""
-        open_lines.append(f"- {sid} [{', '.join(flags)}] {it.get('text', '')}{extra}")
-    if open_lines:
-        lines.append("open items:")
-        lines.extend(open_lines)
-    if len(lines) == 1:
-        lines.append("(none yet, build it from scratch)")
-    return "\n".join(lines), short
-
-
-def build_patch(output: dict, short: dict[str, str], version: int) -> Optional[dict]:
-    """The model's output as a patch for the platform, or None when it changed nothing.
-    Unknown short ids are dropped rather than failing the whole patch."""
-    if not isinstance(output, dict) or output.get("no_change"):
-        return None
-    patch: dict[str, Any] = {"base_version": version}
-    s = {k: v for k, v in (output.get("set") or {}).items() if isinstance(v, str) and v.strip()}
-    if s:
-        patch["set"] = s
-    adds = [a for a in (output.get("add_items") or []) if isinstance(a, dict) and a.get("text")]
-    if adds:
-        patch["add_items"] = adds
-    updates = []
-    for u in output.get("update_items") or []:
-        if isinstance(u, dict) and u.get("id") in short:
-            updates.append({**u, "id": short[u["id"]]})
-    if updates:
-        patch["update_items"] = updates
-    return patch if len(patch) > 1 else None
-
-
 # ── Machine facts (no model) ─────────────────────────────────────────────
 
 async def _git(cwd: str, *args: str) -> Optional[str]:
@@ -373,6 +316,8 @@ class SessionTrackerRunner:
         # Sessions refused for this run (403); tried again after a restart.
         self._refused: set[str] = set()
         self._pending: dict[str, dict] = {}
+        self._feed_due = 0.0
+        self._feed_wake = asyncio.Event()
         self._wake = asyncio.Event()
         self._state: dict[str, Any] = {"sessions": {}}
         self._client: Optional[httpx.AsyncClient] = None
@@ -401,6 +346,44 @@ class SessionTrackerRunner:
             "due": time.monotonic() + delay,
         }
         self._wake.set()
+        if event == "stop":
+            # The turn's conversation reaches the platform with the Stop ship;
+            # its Tracker job is ready a few seconds later.
+            self._feed_due = min(self._feed_due, time.monotonic() + FEED_AFTER_TURN_S)
+            self._feed_wake.set()
+
+    async def session_start(self, params: dict) -> Optional[dict]:
+        """The first message of a session started in Claude Code (the hook's
+        session_start, D37): register it now and say whether it is mirrored
+        and tracked, with its chat link, or why not. None when this bridge is
+        not the machine's runner (another bridge answers)."""
+        if self._lock_fd is None:
+            return None
+        sid = str(params.get("session_id") or "")
+        cwd = str(params.get("cwd") or "")
+        if not sid or cwd.startswith(str(BASE_DIR)) or _is_updates_session(sid):
+            return {"mirrored": False}
+        origin, agent = self._origin(sid)
+        if origin != "direct":
+            return {"mirrored": False}
+        st = self._state["sessions"].setdefault(sid, {"cursor": 0, "tasks": {}})
+        st["seen"] = time.time()
+        st["agent"] = agent
+        # The platform decides (setting, skipped folders, stopped), not a cached
+        # config: a setting turned on a minute ago counts for this session.
+        if self._agent_token(agent) is None:
+            return {"mirrored": False}
+        job = {"cwd": cwd, "transcript_path": params.get("transcript_path")}
+        title = str(params.get("prompt") or "").strip()
+        if await self._register(sid, job, st, _clean(title) or None):
+            self._configs.pop(agent, None)  # tracking is on: refresh what this runner does
+        self._save_state()
+        return {
+            "mirrored": bool(st.get("mirrored")),
+            "chat_url": st.get("chat_url"),
+            "reason": st.get("reason"),
+            "folder": st.get("folder"),
+        }
 
     # -- lifecycle --
 
@@ -413,6 +396,13 @@ class SessionTrackerRunner:
             return
         logger.info("Session tracking: this bridge (%s) tracks sessions on this machine", self._persona)
         self._load_state()
+        feed = asyncio.ensure_future(self._feed_loop())
+        try:
+            await self._facts_loop()
+        finally:
+            feed.cancel()
+
+    async def _facts_loop(self) -> None:
         while self.running:
             try:
                 await self._drain()
@@ -427,6 +417,7 @@ class SessionTrackerRunner:
     def stop(self) -> None:
         self.running = False
         self._wake.set()
+        self._feed_wake.set()
 
     def _try_lock(self) -> bool:
         fd = os.open(BASE_DIR / "runner.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -484,7 +475,7 @@ class SessionTrackerRunner:
         return None
 
     async def _config_for(self, agent: str) -> Optional[dict]:
-        """runner-config of the agent's owner: their setting, prompt and model."""
+        """runner-config of the agent's owner: what this runner does for their sessions."""
         cached = self._configs.get(agent)
         if cached and time.monotonic() - cached[0] < CONFIG_REFRESH_S:
             return cached[1]
@@ -498,14 +489,16 @@ class SessionTrackerRunner:
         try:
             r = await self._http().get(
                 "/api/v1/session-trackers/runner-config",
+                params={"runtime": RUNTIME},
                 headers={"Authorization": f"Bearer {token}"},
             )
             if r.status_code == 200:
                 config = r.json()
-                was = cached and cached[1] and cached[1].get("enabled")
-                if cached is None or bool(was) != bool(config.get("enabled")):
-                    logger.info("Session tracking is %s for %s's account",
-                                "on" if config.get("enabled") else "off", agent)
+                was = cached and cached[1] and cached[1].get("tracking")
+                if cached is None or bool(was) != bool(config.get("tracking")):
+                    logger.info("Session tracking is %s for %s's account%s",
+                                "on" if config.get("tracking") else "off", agent,
+                                ", Trackers run here" if config.get("runs_trackers") else "")
             else:
                 logger.warning("runner-config for %s returned %s", agent, r.status_code)
         except httpx.HTTPError as e:
@@ -611,7 +604,10 @@ class SessionTrackerRunner:
         if first_prompt:
             body["title"] = first_prompt.splitlines()[0][:60]
         body = {k: v for k, v in body.items() if v is not None}
+        # For the owner's skip folders written as ~/...; not stored.
+        body["home"] = os.path.expanduser("~")
         status, data = await self._call(agent, "POST", "/api/v1/session-trackers/register", body)
+        st["checked_at"] = time.time()
         if status not in (200, 201):
             if status == 403:
                 self._refused.add(sid)
@@ -620,17 +616,31 @@ class SessionTrackerRunner:
             else:
                 logger.warning("Tracker register for %s returned %s", sid[:8], status)
             return False
+        if data.get("tracked") is False or not data.get("tracker"):
+            # Tracking off, sessions started in Claude Code off, a skipped
+            # folder, or mirroring stopped for this session (D41).
+            st["mirrored"] = False
+            st["reason"] = data.get("reason") or "off"
+            st["folder"] = data.get("folder")
+            return False
         tracker = data["tracker"]
         st["tracker_id"] = tracker["id"]
         st["agent"] = agent
+        st.pop("reason", None)
+        st.pop("folder", None)
         # What the bridge needs to reply into this session from its chat page
-        # (direct_reply.py): any bridge on this machine reads it from here.
+        # (direct_reply.py) and to mirror it (the agent's own bridge): any
+        # bridge on this machine reads it from here.
         st["chat_id"] = tracker.get("chatId")
+        st["chat_url"] = data.get("chat_url")
         st["origin"] = tracker.get("origin")
+        st["mirrored"] = tracker.get("origin") == "direct"
         st["cwd"] = job.get("cwd") or tracker.get("cwd")
         return True
 
     async def _process(self, sid: str, job: dict) -> None:
+        """The machine's facts for one session after a prompt or turn end (§16.5).
+        The summary itself comes from the server feed (_feed_loop)."""
         sessions = self._state["sessions"]
         if sid in self._refused:
             return
@@ -640,7 +650,9 @@ class SessionTrackerRunner:
             st["agent"] = self._origin(sid)[1]
         agent = st["agent"]
         config = await self._config_for(agent)
-        if not config or not config.get("enabled"):
+        if not config or not config.get("tracking"):
+            return
+        if st.get("reason") == "stopped":
             return
         path = self._transcript(sid, job)
         if path is None:
@@ -648,8 +660,9 @@ class SessionTrackerRunner:
 
         first_build = "tracker_id" not in st
         if first_build:
-            # Everything so far: the checklist from the whole file, the
-            # conversation from its newest part (§8.7).
+            if st.get("reason") and time.time() - st.get("checked_at", 0) < RECHECK_S:
+                return  # not tracked (setting, skipped folder): asked again later
+            # The checklist from the whole file.
             records, end = read_records(path, 0)
             st["tasks"] = apply_tasks(records, {})
         else:
@@ -682,24 +695,9 @@ class SessionTrackerRunner:
             if ws:
                 facts["work_state"] = ws
 
-        patch: dict[str, Any] = {"facts": facts}
-        if job["event"] == "stop" and seg.turns:
-            model_patch = await self._model_patch(agent, config, st["tracker_id"], seg)
-            if model_patch:
-                patch.update(model_patch)
-        if "base_version" not in patch:
-            patch["no_change"] = True
-
-        status, data = await self._call(agent, "PATCH", f"/api/v1/session-trackers/{st['tracker_id']}", patch)
-        if status == 409:
-            # Someone wrote first: redo the model part once against the new version.
-            model_patch = await self._model_patch(agent, config, st["tracker_id"], seg) if seg.turns else None
-            patch = {"facts": facts, **(model_patch or {"no_change": True})}
-            status, data = await self._call(agent, "PATCH", f"/api/v1/session-trackers/{st['tracker_id']}", patch)
-        if status == 422:
-            status, data = await self._call(
-                agent, "PATCH", f"/api/v1/session-trackers/{st['tracker_id']}", {"facts": facts, "no_change": True},
-            )
+        status, _ = await self._call(
+            agent, "PATCH", f"/api/v1/session-trackers/{st['tracker_id']}", {"facts": facts, "no_change": True},
+        )
         if status == 404:
             # Deleted by the owner: next activity registers it as new (D23).
             sessions.pop(sid, None)
@@ -708,21 +706,74 @@ class SessionTrackerRunner:
         if status == 200:
             st["cursor"] = end
         else:
-            logger.warning("Tracker patch for %s returned %s", sid[:8], status)
+            logger.warning("Tracker facts for %s returned %s", sid[:8], status)
         self._save_state()
 
-    async def _model_patch(self, agent: str, config: dict, tracker_id: str,
-                           seg: Segment) -> Optional[dict]:
-        status, data = await self._call(agent, "GET", f"/api/v1/session-trackers/{tracker_id}")
-        if status != 200:
-            return None
-        tracker = data.get("tracker") or {}
-        block, short = render_tracker(tracker, data.get("items") or [])
-        prompt_input = f"{block}\n\nNEWEST TURNS:\n{render_turns(seg.turns)}"
-        output = await self._run_model(config, prompt_input)
-        if output is None:
-            return None
-        return build_patch(output, short, int(tracker.get("version", 0)))
+    # -- the server feed (§16.4) --
+
+    def _machine_agents(self) -> list[str]:
+        """The agents on this machine for this platform, this bridge's first."""
+        from core.hook_common import discover_personas
+        names = [self._persona]
+        for p in discover_personas():
+            if p["api_url"].rstrip("/") == self._api_url and p["name"] not in names:
+                names.append(p["name"])
+        return names
+
+    async def _feed_loop(self) -> None:
+        while self.running:
+            wait = self._feed_due - time.monotonic()
+            if wait > 0:
+                try:
+                    await asyncio.wait_for(self._feed_wake.wait(), timeout=wait)
+                except asyncio.TimeoutError:
+                    pass
+                self._feed_wake.clear()
+                continue
+            self._feed_due = time.monotonic() + FEED_POLL_S
+            try:
+                await self._feed_once()
+            except Exception:
+                logger.exception("Tracker feed error")
+
+    async def _feed_once(self) -> int:
+        """Ask for jobs for every account on this machine that runs its Trackers
+        here, run them and send the outputs back. Returns the jobs run."""
+        done = 0
+        owners: set[str] = set()
+        for agent in self._machine_agents():
+            config = await self._config_for(agent)
+            if not config or not config.get("runs_trackers"):
+                continue
+            if not await self._tracker_token(agent):
+                continue
+            owner = (self._identities.get(agent) or {}).get("agent_name") or agent
+            if owner in owners:
+                continue  # another agent of the same account already asked
+            owners.add(owner)
+            status, data = await self._call(agent, "POST", "/api/v1/session-trackers/jobs/claim", {
+                "runtime": RUNTIME, "host": self._host, "max": FEED_MAX_JOBS,
+            })
+            if status != 200:
+                logger.warning("Tracker job claim for %s's account returned %s", agent, status)
+                continue
+            for job in data.get("jobs") or []:
+                output = await self._run_model(job, str(job.get("input") or ""))
+                if output is None:
+                    continue  # its lease runs out and the job comes back
+                status, _ = await self._call(
+                    agent, "POST", f"/api/v1/session-trackers/jobs/{job['tracker_id']}/result", {
+                        "lease": job["lease"],
+                        "cursor": job["cursor"],
+                        "base_version": job.get("base_version", 0),
+                        "short_ids": job.get("short_ids") or {},
+                        "output": output,
+                    },
+                )
+                if status not in (200, 409):
+                    logger.warning("Tracker job result for %s returned %s", job["tracker_id"][:8], status)
+                done += 1
+        return done
 
     async def _run_model(self, cfg: dict, prompt_input: str) -> Optional[dict]:
         cmd = [

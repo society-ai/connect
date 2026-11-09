@@ -8,9 +8,10 @@ needs no bridge release (docs/design/connect-open-repo.md, step C3).
 
 The tools defined here are the ones that need this machine:
 
-  switch_agent   bind the session to another agent on this machine
-  upload_file    publish a file from this machine's disk
-  download_file  save a Society AI file onto this machine's disk
+  switch_agent         bind the session to another agent on this machine
+  upload_file          publish a file from this machine's disk
+  download_file        save a Society AI file onto this machine's disk
+  stop_session_mirror  stop saving and tracking this Claude Code session
 
 Catalog calls get the session's chat (chat_id) and the agent's company
 (company_id, from COMPANY_ID) filled in when the tool takes them and the call
@@ -426,6 +427,45 @@ async def download_file(artifact_id: str) -> str:
     out.update(path=dest, size=size)
     if str(info.get("mime_type") or "").startswith("image/"):
         out["note"] = "An image: open the path with the Read tool to see it."
+    return _result(out)
+
+
+def _this_session_id() -> Optional[str]:
+    """This Claude Code session's id: the entry for this server's parent process
+    (the claude process) in Claude Code's running-session registry."""
+    sessions = _pathlib.Path(os.path.expanduser("~")) / ".claude" / "sessions"
+    parent = os.getppid()
+    try:
+        for p in sessions.glob("*.json"):
+            try:
+                data = json.loads(p.read_text())
+            except (OSError, ValueError):
+                continue
+            if data.get("pid") == parent and data.get("sessionId"):
+                return str(data["sessionId"])
+    except OSError:
+        pass
+    return None
+
+
+@mcp.tool()
+async def stop_session_mirror() -> str:
+    """Stop saving this Claude Code session to Society AI and tracking it.
+
+    Use when the user asks not to save, mirror or track this session. Its
+    later messages and replies stay on this computer; what was already saved
+    stays in Society AI until the user deletes the session's chat there. The
+    session is not saved again, also after it is resumed.
+    """
+    session_id = _this_session_id()
+    if not session_id:
+        return _result(_error("Could not tell which Claude Code session this is"))
+    out = await api.post("/api/v1/session-trackers/stop", {"external_session_id": session_id})
+    if isinstance(out, dict) and out.get("stopped"):
+        return _result({"stopped": True, "session_id": session_id,
+                        "note": "Later turns of this session stay on this computer."})
+    if isinstance(out, dict) and out.get("status") == 404:
+        return _result({"stopped": False, "note": "This session is not saved to Society AI."})
     return _result(out)
 
 

@@ -3,12 +3,16 @@
 - Only the conversation is read: user prompts and agent text; tool calls,
   tool results, thinking, sub-agents and system reminders never are.
 - The checklist is replayed from TaskCreate / TaskUpdate (and TodoWrite).
-- The model sees short item ids; the patch carries the real ids and drops
-  unknown ones.
 - Turns of one session coalesce into one job; the stop event wins.
-- A full job: registers a new session (bridge vs direct origin), sends facts
-  and the model's patch, keeps the cursor only on success, redoes the model
-  part once on 409, and forgets a deleted session on 404.
+- A job sends the machine's facts only (§16.5): registers a new session
+  (bridge vs direct origin), keeps the cursor only on success, forgets a
+  deleted session on 404. A session the platform does not track (setting,
+  skipped folder, stopped) is not asked about again on every turn.
+- session_start (D37): the first message of a direct session registers it and
+  answers the banner facts; only the machine's runner answers.
+- The server feed (§16.4): jobs are claimed once per account that runs its
+  Trackers here, run with the job's own prompt and schema, and the output is
+  sent back with the lease and cursor.
 - Several accounts on one machine: each session is written as the Tracker
   agent of its own agent's owner, under that owner's setting; a refused
   session is tried again after a restart.
@@ -56,8 +60,8 @@ def write_transcript(path: pathlib.Path, records):
 class TestReading(unittest.TestCase):
     def test_conversation_only(self):
         seg = st.extract_segment(TRANSCRIPT)
-        text = st.render_turns(seg.turns)
-        self.assertIn("USER: Design the tracker please", text)
+        text = "\n".join(t for _, t in seg.turns)
+        self.assertIn("Design the tracker please", text)
         self.assertIn("Want me to commit?", text)
         for leaked in ("secret", "rm -rf", "Task #1", "ignore me", "Sub-agent"):
             self.assertNotIn(leaked, text)
@@ -86,43 +90,6 @@ class TestReading(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertEqual(end, len(json.dumps(rec("user", "a"))) + 1)
 
-    def test_newest_turns_fit_the_cap(self):
-        turns = [("USER", "x" * 100), ("AGENT", "y" * 100), ("USER", "z" * 100)]
-        out = st.render_turns(turns, cap=250)
-        self.assertNotIn("x", out)
-        self.assertTrue(out.endswith("z" * 100))
-
-
-class TestPatch(unittest.TestCase):
-    ITEMS = [
-        {"id": "uuid-q", "kind": "question", "state": "open", "text": "Backfill?", "blocking": True},
-        {"id": "uuid-a", "kind": "approval", "state": "pending", "text": "Push", "action": "git push"},
-        {"id": "uuid-s", "kind": "step", "state": "todo", "text": "hook step"},
-    ]
-
-    def test_short_ids_and_block(self):
-        block, short = st.render_tracker({"version": 4, "title": "T", "nextStep": "N"}, self.ITEMS)
-        self.assertEqual(short, {"q1": "uuid-q", "a1": "uuid-a"})
-        self.assertIn("CURRENT TRACKER (version 4):", block)
-        self.assertIn("next_step: N", block)
-        self.assertIn("- q1 [question, open, blocking] Backfill?", block)
-        self.assertNotIn("hook step", block)
-
-    def test_patch_maps_ids_and_drops_unknown(self):
-        out = {
-            "set": {"status": "waiting_on_you", "state": " "},
-            "add_items": [{"kind": "decision", "text": "No backfill"}],
-            "update_items": [{"id": "q1", "state": "answered"}, {"id": "q9", "state": "answered"}],
-        }
-        patch = st.build_patch(out, {"q1": "uuid-q"}, 4)
-        self.assertEqual(patch["base_version"], 4)
-        self.assertEqual(patch["set"], {"status": "waiting_on_you"})
-        self.assertEqual(patch["update_items"], [{"id": "uuid-q", "state": "answered"}])
-
-    def test_no_change(self):
-        self.assertIsNone(st.build_patch({"no_change": True}, {}, 1))
-        self.assertIsNone(st.build_patch({"update_items": [{"id": "zz"}]}, {}, 1))
-
 
 class TestRunner(unittest.TestCase):
     def setUp(self):
@@ -147,8 +114,8 @@ class TestRunner(unittest.TestCase):
     def new_runner(self):
         runner = st.SessionTrackerRunner("jenkins", "sai_persona", "https://api.test", default_agent="jenkins")
         runner._lock_fd = 99
-        config = {"enabled": True, "model": "haiku", "prompt": "p", "output_schema": {}}
-        runner._configs = {"jenkins": (time.monotonic(), config), "searchpro": (time.monotonic(), config)}
+        config = {"tracking": True, "claude_code_sessions": True, "runs_trackers": True, "skip_folders": []}
+        runner._configs = {"jenkins": (time.monotonic(), config), "searchpro": (time.monotonic(), dict(config))}
 
         async def fake_call(agent, method, path, body=None):
             self.calls.append((method, path, body, agent))
@@ -179,12 +146,11 @@ class TestRunner(unittest.TestCase):
         self.runner.notify({"session_id": "s2", "cwd": str(st.BASE_DIR / "runs")})
         self.assertNotIn("s2", self.runner._pending)
 
-    def test_new_direct_session_registers_then_patches(self):
-        tracker = {"id": "t1", "version": 0}
+    def test_new_direct_session_registers_then_sends_facts(self):
+        tracker = {"id": "t1", "version": 0, "origin": "direct", "chatId": "c1"}
         self.responses = [
-            (201, {"tracker": tracker}),           # register
-            (200, {"tracker": tracker, "items": []}),  # get (model input)
-            (200, {"tracker": {**tracker, "version": 1}}),  # patch
+            (201, {"tracker": tracker, "chat_url": "https://app/chat/c1"}),  # register
+            (200, {"tracker": tracker}),                                      # facts
         ]
         self.run_job()
         method, path, body, agent = self.calls[0]
@@ -192,16 +158,40 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(body["origin"], "direct")
         self.assertEqual(body["agent_name"], "jenkins")
         self.assertEqual(body["title"], "Design the tracker please")
+        self.assertEqual(body["home"], os.path.expanduser("~"))
         self.assertEqual(agent, "jenkins")
-        _, ppath, patch, _ = self.calls[2]
+        _, ppath, patch, _ = self.calls[1]
         self.assertEqual(ppath, "/api/v1/session-trackers/t1")
-        self.assertEqual(patch["base_version"], 0)
-        self.assertEqual(patch["set"], {"status": "waiting_on_you"})
+        # Facts only: the summary comes from the server feed.
+        self.assertEqual(set(patch), {"facts", "no_change"})
         self.assertEqual(patch["facts"]["steps"][0], {"text": "Write schema", "state": "done"})
         self.assertFalse(patch["facts"]["running"])
+        self.runner._run_model.assert_not_awaited()
         state = self.runner._state["sessions"]["s1"]
         self.assertEqual(state["tracker_id"], "t1")
+        self.assertTrue(state["mirrored"])
+        self.assertEqual(state["chat_url"], "https://app/chat/c1")
         self.assertEqual(state["cursor"], self.transcript.stat().st_size)
+
+    def test_a_session_the_platform_does_not_track_is_asked_again_later(self):
+        self.responses = [(200, {"tracked": False, "reason": "folder_skipped", "folder": "~/client"})]
+        self.run_job()
+        state = self.runner._state["sessions"]["s1"]
+        self.assertEqual(state["reason"], "folder_skipped")
+        self.assertFalse(state["mirrored"])
+        self.calls.clear()
+        self.run_job()
+        self.assertEqual(self.calls, [])
+        state["checked_at"] = time.time() - st.RECHECK_S - 1
+        self.responses = [(200, {"tracked": False, "reason": "off"})]
+        self.run_job()
+        self.assertEqual(self.calls[0][1], "/api/v1/session-trackers/register")
+
+    def test_a_stopped_session_sends_nothing(self):
+        self.runner._state["sessions"]["s1"] = {"cursor": 0, "tasks": {}, "agent": "jenkins", "reason": "stopped",
+                                                "checked_at": 0}
+        self.run_job()
+        self.assertEqual(self.calls, [])
 
     def searchpro_session(self):
         (st.SOCIETY_CACHE / "searchpro").mkdir()
@@ -211,48 +201,40 @@ class TestRunner(unittest.TestCase):
 
     def test_bridge_session_is_written_as_its_personas_owner(self):
         self.searchpro_session()
-        self.responses = [(201, {"tracker": {"id": "t1", "version": 0}}),
-                          (200, {"tracker": {"id": "t1", "version": 0}, "items": []}),
-                          (200, {})]
+        self.responses = [(201, {"tracker": {"id": "t1", "version": 0, "origin": "society_ai"}}), (200, {})]
         self.run_job()
         self.assertEqual(self.calls[0][2]["origin"], "society_ai")
         self.assertEqual(self.calls[0][2]["agent_name"], "searchpro")
         # Every call of this session goes as searchpro's owner's Tracker agent.
         self.assertEqual({c[3] for c in self.calls}, {"searchpro"})
         self.assertEqual(self.runner._state["sessions"]["s1"]["agent"], "searchpro")
+        # Mirrored by the bridge that started it, not adopted as a direct session.
+        self.assertFalse(self.runner._state["sessions"]["s1"]["mirrored"])
 
     def test_each_accounts_own_setting_decides(self):
         self.searchpro_session()
-        self.runner._configs["searchpro"] = (time.monotonic(), {"enabled": False})
+        self.runner._configs["searchpro"] = (time.monotonic(), {"tracking": False})
         self.run_job()
         self.assertEqual(self.calls, [])
         self.assertNotIn("tracker_id", self.runner._state["sessions"]["s1"])
 
-    def test_prompt_event_sends_facts_without_the_model(self):
-        self.runner._state["sessions"]["s1"] = {"tracker_id": "t1", "cursor": 0, "tasks": {}}
+    def test_prompt_event_sends_running(self):
+        self.runner._state["sessions"]["s1"] = {"tracker_id": "t1", "cursor": 0, "tasks": {}, "agent": "jenkins"}
         self.responses = [(200, {})]
         self.run_job("prompt")
-        self.runner._run_model.assert_not_awaited()
         patch = self.calls[0][2]
         self.assertTrue(patch["no_change"])
         self.assertTrue(patch["facts"]["running"])
 
-    def test_conflict_redoes_the_model_once_and_failure_keeps_the_cursor(self):
-        self.runner._state["sessions"]["s1"] = {"tracker_id": "t1", "cursor": 0, "tasks": {}}
-        self.responses = [
-            (200, {"tracker": {"id": "t1", "version": 2}, "items": []}),
-            (409, {}),
-            (200, {"tracker": {"id": "t1", "version": 3}, "items": []}),
-            (500, {}),
-        ]
+    def test_a_failed_facts_patch_keeps_the_cursor(self):
+        self.runner._state["sessions"]["s1"] = {"tracker_id": "t1", "cursor": 0, "tasks": {}, "agent": "jenkins"}
+        self.responses = [(500, {})]
         self.run_job()
-        self.assertEqual(self.runner._run_model.await_count, 2)
-        self.assertEqual(self.calls[3][2]["base_version"], 3)
         self.assertEqual(self.runner._state["sessions"]["s1"]["cursor"], 0)
 
     def test_deleted_session_is_forgotten(self):
-        self.runner._state["sessions"]["s1"] = {"tracker_id": "t1", "cursor": 0, "tasks": {}}
-        self.responses = [(200, {"tracker": {"id": "t1", "version": 0}, "items": []}), (404, {})]
+        self.runner._state["sessions"]["s1"] = {"tracker_id": "t1", "cursor": 0, "tasks": {}, "agent": "jenkins"}
+        self.responses = [(404, {})]
         self.run_job()
         self.assertNotIn("s1", self.runner._state["sessions"])
 
@@ -265,12 +247,89 @@ class TestRunner(unittest.TestCase):
         self.runner._save_state()
         self.runner = self.new_runner()
         self.runner._load_state()
-        self.responses = [(201, {"tracker": {"id": "t1", "version": 0}}),
-                          (200, {"tracker": {"id": "t1", "version": 0}, "items": []}),
-                          (200, {})]
+        self.responses = [(201, {"tracker": {"id": "t1", "version": 0, "origin": "direct"}}), (200, {})]
         self.run_job()
         self.assertEqual(self.calls[0][1], "/api/v1/session-trackers/register")
         self.assertEqual(self.runner._state["sessions"]["s1"]["tracker_id"], "t1")
+
+    # -- session_start (D37) --
+
+    def start(self, **params):
+        return asyncio.run(self.runner.session_start({
+            "session_id": "s1", "cwd": "/Users/me/app", "prompt": "Fix the login bug\nplease", **params,
+        }))
+
+    def test_first_message_registers_and_answers_the_banner(self):
+        tracker = {"id": "t1", "origin": "direct", "chatId": "c1"}
+        self.responses = [(201, {"tracker": tracker, "chat_url": "https://app/chat/c1"})]
+        with mock.patch.object(self.runner, "_agent_token", return_value="sai_persona"):
+            answer = self.start()
+        self.assertEqual(answer, {"mirrored": True, "chat_url": "https://app/chat/c1", "reason": None, "folder": None})
+        body = self.calls[0][2]
+        self.assertEqual(body["title"], "Fix the login bug")
+        self.assertEqual(body["cwd"], "/Users/me/app")
+        saved = json.loads((st.BASE_DIR / "state.json").read_text())["sessions"]["s1"]
+        # The agent's own bridge reads this to mirror the session.
+        self.assertTrue(saved["mirrored"])
+        self.assertEqual(saved["agent"], "jenkins")
+        self.assertEqual(saved["chat_id"], "c1")
+
+    def test_first_message_says_why_not(self):
+        self.responses = [(200, {"tracked": False, "reason": "stopped"})]
+        with mock.patch.object(self.runner, "_agent_token", return_value="sai_persona"):
+            answer = self.start()
+        self.assertEqual(answer["mirrored"], False)
+        self.assertEqual(answer["reason"], "stopped")
+
+    def test_only_the_runner_answers_and_bridge_sessions_are_left_alone(self):
+        self.runner._lock_fd = None
+        self.assertIsNone(self.start())
+        self.runner._lock_fd = 99
+        self.searchpro_session()
+        self.assertEqual(self.start(), {"mirrored": False})
+        self.assertEqual(self.calls, [])
+
+    # -- the server feed (§16.4) --
+
+    def test_feed_claims_once_per_account_and_sends_outputs_back(self):
+        job = {"tracker_id": "t9", "lease": "l" * 32, "cursor": {"seq": 7}, "base_version": 2,
+               "short_ids": {"q1": "item-1"}, "input": "CURRENT TRACKER ...", "model": "haiku",
+               "prompt": "p", "output_schema": {}}
+        self.runner._identities = {"jenkins": {"agent_name": "session-tracker-a"},
+                                   "searchpro": {"agent_name": "session-tracker-a"}}
+        self.responses = [(200, {"jobs": [job]}), (200, {"status": "applied"})]
+        with mock.patch.object(self.runner, "_machine_agents", return_value=["jenkins", "searchpro"]), \
+                mock.patch.object(self.runner, "_tracker_token", mock.AsyncMock(return_value="trk")):
+            done = asyncio.run(self.runner._feed_once())
+        self.assertEqual(done, 1)
+        claims = [c for c in self.calls if c[1].endswith("/jobs/claim")]
+        self.assertEqual(len(claims), 1)  # one account, asked once
+        self.assertEqual(claims[0][2], {"runtime": "claude_code", "host": self.runner._host, "max": st.FEED_MAX_JOBS})
+        self.runner._run_model.assert_awaited_once_with(job, "CURRENT TRACKER ...")
+        _, rpath, result, _ = self.calls[1]
+        self.assertEqual(rpath, "/api/v1/session-trackers/jobs/t9/result")
+        self.assertEqual(result["lease"], "l" * 32)
+        self.assertEqual(result["cursor"], {"seq": 7})
+        self.assertEqual(result["base_version"], 2)
+        self.assertEqual(result["short_ids"], {"q1": "item-1"})
+        self.assertEqual(result["output"]["set"], {"status": "waiting_on_you"})
+
+    def test_feed_skips_accounts_that_run_trackers_elsewhere_and_failed_runs(self):
+        self.runner._configs["searchpro"] = (time.monotonic(), {"tracking": True, "runs_trackers": False})
+        self.runner._identities = {"jenkins": {"agent_name": "session-tracker-a"}}
+        self.runner._run_model = mock.AsyncMock(return_value=None)
+        self.responses = [(200, {"jobs": [{"tracker_id": "t9", "lease": "x", "cursor": {"seq": 1}, "input": "i"}]})]
+        with mock.patch.object(self.runner, "_machine_agents", return_value=["jenkins", "searchpro"]), \
+                mock.patch.object(self.runner, "_tracker_token", mock.AsyncMock(return_value="trk")):
+            done = asyncio.run(self.runner._feed_once())
+        self.assertEqual(done, 0)
+        # Claimed for jenkins only; the failed run sends nothing (its lease runs out).
+        self.assertEqual([c[1] for c in self.calls], ["/api/v1/session-trackers/jobs/claim"])
+
+    def test_a_turn_end_asks_for_jobs_soon(self):
+        self.runner._feed_due = time.monotonic() + 60
+        self.runner.notify({"session_id": "s1", "event": "stop", "cwd": "/r"})
+        self.assertLess(self.runner._feed_due, time.monotonic() + st.FEED_AFTER_TURN_S + 1)
 
 
 class TestTrackerAgents(unittest.TestCase):

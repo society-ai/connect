@@ -1,0 +1,251 @@
+"""Sessions started in Claude Code, mirrored while tracked (Society AI design
+session-trackers D36 to D43).
+
+- The first message's hook asks the tracking bridge to register the session
+  and prints the banner line (terminal) and the agent's instruction (desktop);
+  once per session per Claude Code process; nothing for bridge sessions or
+  when tracking is off.
+- The agent's own bridge picks the session up from the runner's state and
+  ships it as 'direct'; another agent's bridge does not.
+- A batch refused because mirroring was stopped makes the shipper forget the
+  session.
+- Turns the owner sent from the app ship marked as chat echoes, so the chat
+  does not show them twice.
+- stop_session_mirror finds its own session and stops it.
+"""
+
+import asyncio
+import json
+import os
+import pathlib
+import sys
+import tempfile
+import types
+import unittest
+from unittest import mock
+
+import httpx
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+os.environ.setdefault("SESSION_MODE", "false")
+
+from agents.claude_code.runner import hook_user_prompt as hook  # noqa: E402
+from agents.claude_code.runner import session_tracker as st  # noqa: E402
+from agents.claude_code.runner import transcript_shipper as ts  # noqa: E402
+
+
+class Banner(unittest.TestCase):
+    def test_lines(self):
+        url = "https://app/chat/c1"
+        self.assertEqual(
+            hook.banner_line({"mirrored": True, "chat_url": url}, md=True),
+            f"🪞 Mirrored and tracked on Society AI · [Open this session]({url})",
+        )
+        self.assertEqual(hook.banner_line({"mirrored": True, "chat_url": url}, md=False),
+                         f"🪞 Mirrored and tracked on Society AI · {url}")
+        self.assertEqual(hook.banner_line({"mirrored": False, "reason": "folder_skipped", "folder": "~/x"}, md=True),
+                         "🔒 Not mirrored: ~/x is skipped in Settings")
+        self.assertEqual(hook.banner_line({"mirrored": False, "reason": "stopped"}, md=True),
+                         "🔒 Not mirrored: you stopped mirroring this session")
+        for quiet in ({"mirrored": False, "reason": "off"}, {"mirrored": False}, {"mirrored": True}):
+            self.assertIsNone(hook.banner_line(quiet, md=True))
+
+    def test_output_asks_the_agent_for_the_line_and_names_the_stop_tool(self):
+        out = hook.hook_output({"mirrored": True, "chat_url": "https://app/chat/c1"})
+        context = out["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
+        self.assertIn("> 🪞 Mirrored and tracked on Society AI · [Open this session](https://app/chat/c1)", context)
+        self.assertIn("stop_session_mirror", context)
+        self.assertEqual(out["systemMessage"], "🪞 Mirrored and tracked on Society AI · https://app/chat/c1")
+        skipped = hook.hook_output({"mirrored": False, "reason": "folder_skipped", "folder": "~/x"})
+        self.assertNotIn("stop_session_mirror", skipped["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(hook.hook_output({"mirrored": False, "reason": "off"}))
+
+
+class HookMain(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.patches = [
+            mock.patch.object(hook, "STARTED_DIR", pathlib.Path(self.tmp.name) / "started"),
+            mock.patch.object(hook, "_notify_mirrors"),
+            mock.patch.object(hook, "_read_hook_input",
+                              return_value={"session_id": "s1", "cwd": "/w", "prompt": "hi"}),
+        ]
+        for p in self.patches:
+            p.start()
+        env = {k: v for k, v in os.environ.items() if k not in ("SOCIETY_AI_TRACKER", "SOCIETY_AI_DISPATCHED")}
+        self.env = mock.patch.dict(os.environ, env, clear=True)
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def run_hook(self):
+        with mock.patch("builtins.print") as printed:
+            hook.main()
+        return [json.loads(c.args[0]) for c in printed.call_args_list]
+
+    def test_once_per_session_per_process(self):
+        answer = {"mirrored": True, "chat_url": "https://app/chat/c1"}
+        with mock.patch.object(hook, "_session_start", return_value=answer) as start:
+            first = self.run_hook()
+            second = self.run_hook()
+        start.assert_called_once()
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+        # The prompt is mirrored either way.
+        self.assertEqual(hook._notify_mirrors.call_count, 2)
+
+    def test_asks_again_when_no_bridge_answered(self):
+        with mock.patch.object(hook, "_session_start", return_value=None) as start:
+            self.assertEqual(self.run_hook(), [])
+            self.run_hook()
+        self.assertEqual(start.call_count, 2)
+
+    def test_bridge_sessions_and_tracker_runs_skip_it(self):
+        for flag in ("SOCIETY_AI_DISPATCHED", "SOCIETY_AI_TRACKER"):
+            with mock.patch.dict(os.environ, {flag: "1"}), \
+                    mock.patch.object(hook, "_session_start") as start:
+                self.assertEqual(self.run_hook(), [])
+            start.assert_not_called()
+
+    def test_session_start_takes_the_runners_answer(self):
+        replies = [None, {"mirrored": False, "reason": "off"}]
+
+        class FakeSock:
+            def __init__(self, *a):
+                self.reply = replies.pop(0)
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def settimeout(self, t):
+                pass
+            def connect(self, path):
+                pass
+            def sendall(self, data):
+                self.sent = json.loads(data)
+            def recv(self, n):
+                if self.reply is False:
+                    return b""
+                out = (json.dumps({"id": "x", "result": self.reply}) + "\n").encode()
+                self.reply = False
+                return out
+
+        with mock.patch.object(hook, "_bridge_sockets", return_value=["/a.sock", "/b.sock"]), \
+                mock.patch.object(hook.socket, "socket", FakeSock):
+            answer = hook._session_start({"session_id": "s1", "cwd": "/w", "prompt": "hi"})
+        self.assertEqual(answer, {"mirrored": False, "reason": "off"})
+
+
+class Adopting(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = pathlib.Path(self.tmp.name)
+        self.patch = mock.patch.object(st, "BASE_DIR", self.base)
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        self.tmp.cleanup()
+
+    def adopt(self, persona, state):
+        from core.bridge import Bridge
+        (self.base / "state.json").write_text(json.dumps({"sessions": {"s1": state}}))
+        shipper = ts.TranscriptShipper("https://api.x", "sai_x", str(self.base / persona))
+        fake = types.SimpleNamespace(_shipper=shipper, ctx=types.SimpleNamespace(name=persona))
+        Bridge._adopt_direct_session(fake, "s1", {"cwd": "/w"})
+        return shipper
+
+    def test_the_sessions_own_agent_ships_it_as_direct(self):
+        shipper = self.adopt("jenkins", {"mirrored": True, "agent": "jenkins", "chat_id": "c1"})
+        self.assertTrue(shipper.is_registered("s1"))
+        self.assertEqual(shipper._state["s1"]["work_item_kind"], "direct")
+        self.assertEqual(shipper._state["s1"]["dispatch_chat_id"], "c1")
+
+    def test_not_for_another_agent_or_a_session_not_mirrored(self):
+        self.assertFalse(self.adopt("searchpro", {"mirrored": True, "agent": "jenkins"}).is_registered("s1"))
+        self.assertFalse(self.adopt("jenkins", {"mirrored": False, "agent": "jenkins"}).is_registered("s1"))
+
+
+def _record(text, **extra):
+    return {"type": "user", "timestamp": "2026-11-08T10:00:00Z", "message": {"content": text}, **extra}
+
+
+class Shipping(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = pathlib.Path(self.tmp.name)
+        self.transcript = self.dir / "s1.jsonl"
+        self.shipper = ts.TranscriptShipper("https://api.x", "sai_x", str(self.dir))
+        self.shipper.register("s1", cwd=str(self.dir), work_item_kind="direct")
+        self.path = mock.patch.object(ts, "transcript_path", return_value=self.transcript)
+        self.path.start()
+
+    def tearDown(self):
+        self.path.stop()
+        self.tmp.cleanup()
+
+    def entries(self, records):
+        self.transcript.write_text("".join(json.dumps(r) + "\n" for r in records))
+        entries, _, _ = self.shipper._read_new_entries("s1", self.shipper._state["s1"])
+        return [e["content"]["text"] for e in entries]
+
+    def test_relayed_messages_ship_as_chat_echoes(self):
+        relayed = ('Another Claude session sent a message:\n<cross-session-message from="uds:/x.sock" '
+                   'from-name="Society AI" from-mode="prompting">\nDeploy it\n</cross-session-message>\n\nThis came')
+        texts = self.entries([_record(relayed), _record("typed here")])
+        self.assertEqual(texts[0], ts.chat_echo("Deploy it"))
+        self.assertTrue(texts[0].startswith('<channel ') and 'kind="chat"' in texts[0])
+        self.assertEqual(texts[1], "typed here")
+
+    def test_a_resumed_turn_from_the_app_ships_as_a_chat_echo_once(self):
+        self.shipper.expect_app_turn("s1", "What is left?")
+        texts = self.entries([_record("What is left?"), _record("What is left?")])
+        self.assertEqual(texts, [ts.chat_echo("What is left?"), "What is left?"])
+
+    def test_a_stopped_session_is_forgotten(self):
+        self.transcript.write_text(json.dumps(_record("hello")) + "\n")
+        handler = lambda request: httpx.Response(409, json={"stopped": True})  # noqa: E731
+        self.shipper._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.assertFalse(asyncio.run(self.shipper.ship("s1")))
+        self.assertFalse(self.shipper.is_registered("s1"))
+        saved = json.loads((self.dir / "mirror_state.json").read_text())
+        self.assertNotIn("s1", saved)
+
+    def test_other_refusals_keep_the_session(self):
+        self.transcript.write_text(json.dumps(_record("hello")) + "\n")
+        handler = lambda request: httpx.Response(409, json={"error": "other"})  # noqa: E731
+        self.shipper._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.assertFalse(asyncio.run(self.shipper.ship("s1")))
+        self.assertTrue(self.shipper.is_registered("s1"))
+
+
+class StopTool(unittest.TestCase):
+    def test_finds_its_own_session_and_stops_it(self):
+        from core import mcp_server
+        with tempfile.TemporaryDirectory() as home:
+            sessions = pathlib.Path(home) / ".claude" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "1.json").write_text(json.dumps({"pid": 1, "sessionId": "other"}))
+            (sessions / "2.json").write_text(json.dumps({"pid": os.getppid(), "sessionId": "mine"}))
+            with mock.patch.dict(os.environ, {"HOME": home}), \
+                    mock.patch.object(mcp_server.api, "post", mock.AsyncMock(return_value={"stopped": True})) as post, \
+                    mock.patch.object(mcp_server, "_label", return_value="[as jenkins]"):
+                out = asyncio.run(mcp_server.stop_session_mirror())
+        post.assert_awaited_once_with("/api/v1/session-trackers/stop", {"external_session_id": "mine"})
+        self.assertIn('"stopped": true', out)
+
+    def test_says_so_when_it_cannot_tell_the_session(self):
+        from core import mcp_server
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}), \
+                mock.patch.object(mcp_server, "_label", return_value="[as jenkins]"):
+            out = asyncio.run(mcp_server.stop_session_mirror())
+        self.assertIn("Could not tell which Claude Code session this is", out)
+
+
+if __name__ == "__main__":
+    unittest.main()
