@@ -279,6 +279,25 @@ class AuthError(Exception):
 _http_client: httpx.AsyncClient | None = None
 
 
+def _upload_answer(content: Any) -> dict:
+    """The JSON an upload_file call answered with, from its transcript tool_result. core/mcp_server.py
+    _result writes an identity line, then the JSON; Claude Code records that string either as text
+    blocks or wrapped as {"result": "<that string>"}."""
+    if isinstance(content, list):
+        content = "\n".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
+    if not isinstance(content, str) or "{" not in content:
+        return {}
+    try:
+        answer = json.loads(content[content.index("{"):])
+    except ValueError:
+        return {}
+    if not isinstance(answer, dict):
+        return {}
+    if "artifact_id" not in answer and isinstance(answer.get("result"), str):
+        return _upload_answer(answer["result"])
+    return answer
+
+
 def _get_http_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None or _http_client.is_closed:
@@ -1820,8 +1839,10 @@ class Bridge:
             msg_id=self._next_id(),
         )
 
-    async def _send_task_complete(self, task_id: str, result_text: str, exit_code: int = 0):
-        """Send task.complete to the hub.
+    async def _send_task_complete(self, task_id: str, result_text: str, exit_code: int = 0,
+                                  files: list[dict] | None = None):
+        """Send task.complete to the hub. `files` are file parts (_turn_files) sent after the text: the
+        router keeps the ones the agent may open and shares them with the person who asked.
 
         Long results are truncated to MAX_RESULT_CHARS; we log the original
         length so a missing tail can be diagnosed from the bridge logs.
@@ -1846,7 +1867,7 @@ class Bridge:
                     "state": "completed" if exit_code == 0 else "failed",
                     "message": {
                         "role": "agent",
-                        "parts": [{"type": "text", "text": result_text}],
+                        "parts": [{"type": "text", "text": result_text}, *(files or [])],
                     },
                 },
                 "final": True,
@@ -2173,6 +2194,69 @@ class Bridge:
                     if text and (not out or out[-1] != text):
                         out.append(text)
         return "\n\n".join(out).strip(), last_stop in FINAL_STOP_REASONS
+
+    @staticmethod
+    def _turn_files(cwd: str, session_id: str, event_id: str) -> list[dict]:
+        """The files the session published with upload_file during one turn, as A2A file parts, so the
+        reply carries them to the person who asked (shown as file cards in their chat).
+
+        Same bounded window as _turn_reply: after our channel event, stopping at the next one, main
+        session only. A file counts when its upload_file call answered with an artifact_id (the
+        /api/v1/artifacts/complete answer). The router checks again that the agent may open each one."""
+        from agents.claude_code.runner.transcript_shipper import transcript_path
+
+        needles = (f'event_id="{event_id}"', f'event_id=\\"{event_id}\\"')
+        try:
+            with open(transcript_path(cwd, session_id), encoding="utf-8", errors="replace") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            return []
+        start = max((i for i, raw in enumerate(lines) if any(n in raw for n in needles)), default=-1)
+        if start < 0:
+            return []
+
+        uploads: dict[str, dict] = {}   # upload_file calls by tool_use id, with their input
+        files: list[dict] = []
+        seen: set[str] = set()
+        for raw in lines[start + 1:]:
+            try:
+                d = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(d, dict) or d.get("isSidechain") or not isinstance(d.get("message"), dict):
+                continue
+            content = d["message"].get("content")
+            if d.get("type") == "user" and isinstance(content, str) and "<channel source=" in content:
+                break  # the next dispatch; this turn is done
+            if not isinstance(content, list):
+                continue
+            for c in content:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "tool_use" and str(c.get("name", "")).endswith("upload_file"):
+                    uploads[str(c.get("id"))] = c.get("input") if isinstance(c.get("input"), dict) else {}
+                elif c.get("type") == "tool_result" and str(c.get("tool_use_id")) in uploads:
+                    answer = _upload_answer(c.get("content"))
+                    asked = uploads[str(c.get("tool_use_id"))]
+                    artifact_id = str(answer.get("artifact_id") or "")
+                    if not artifact_id or answer.get("error") or artifact_id in seen:
+                        continue
+                    seen.add(artifact_id)
+                    meta: dict = {"artifact_id": artifact_id}
+                    if isinstance(answer.get("size"), int):
+                        meta["size"] = answer["size"]
+                    files.append({
+                        "type": "file",
+                        "file": {
+                            "name": str(answer.get("name") or asked.get("name") or "file"),
+                            "mimeType": str(answer.get("mime_type") or asked.get("mime_type")
+                                            or "application/octet-stream"),
+                            # The router requires a uri and replaces it with the app's link.
+                            "uri": f"artifact:{artifact_id}",
+                        },
+                        "metadata": meta,
+                    })
+        return files
 
     @staticmethod
     def _turn_api_error(cwd: str, session_id: str, event_id: str) -> Optional[str]:
@@ -2815,7 +2899,11 @@ class Bridge:
                 # group with send_group_message. Nothing of it goes back to Society AI.
                 text = ("Handled in the updates session." if sender.session == UPDATES_SESSION
                         else "Handled in the group's session.")
-            await self._send_task_complete(task_id, text or "(no reply)", exit_code=0)
+            # Files the agent published while answering its owner go back with the reply. Not for a
+            # contact: a file uploaded for the owner during that turn must never reach someone else.
+            files = (self._turn_files(work_dir, rec.session_id, task_id)
+                     if sender is None or (sender.is_owner and not sender.session) else [])
+            await self._send_task_complete(task_id, text or "(no reply)", exit_code=0, files=files)
         finally:
             self._pending_session_tasks.pop(task_id, None)
             # Only clear the turn watch if it is still ours: a follow-up
