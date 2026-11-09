@@ -403,5 +403,18 @@ class TestHookGuard(unittest.TestCase):
         socks.assert_not_called()
 
 
+class BridgeSockets(unittest.TestCase):
+    def test_the_sessions_own_bridge_is_reached_wherever_it_runs(self):
+        # A bridge run from another folder (a dev or test checkout) launches its sessions with its own
+        # SOCIETY_AI_BRIDGE_SOCKET: the Stop hook must reach it, not only the installed checkout's.
+        from agents.claude_code.runner import hook_stop
+        with tempfile.TemporaryDirectory() as d:
+            sock = os.path.join(d, "bridge.sock")
+            pathlib.Path(sock).touch()
+            with mock.patch.dict(os.environ, {"SOCIETY_AI_BRIDGE_SOCKET": sock}), \
+                    mock.patch.object(hook_stop, "REPO_DIR", pathlib.Path(d) / "no-checkout"):
+                self.assertEqual(hook_stop._bridge_sockets()[0], sock)  # first; the machine's own may follow
+
+
 if __name__ == "__main__":
     unittest.main()

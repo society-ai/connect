@@ -51,10 +51,12 @@ def _read_hook_input() -> dict[str, Any]:
 
 
 def _bridge_sockets() -> list[str]:
-    """Every bridge IPC socket that may exist on this machine: the default
-    persona's plus one per .env.<name> (mirroring setup.sh's layout)."""
+    """Every bridge IPC socket that may exist on this machine: the one the
+    session was launched with (SOCIETY_AI_BRIDGE_SOCKET, so a bridge run from
+    another folder hears about its own turns), the default persona's, and one
+    per .env.<name> (mirroring setup.sh's layout)."""
     cache = os.path.join(os.path.expanduser("~"), ".cache", "society-ai")
-    paths = []
+    paths = [os.environ.get("SOCIETY_AI_BRIDGE_SOCKET", "").strip()]
     default_env = parse_env_file(REPO_DIR / ".env")
     paths.append(default_env.get("SOCIETY_AI_BRIDGE_SOCKET")
                  or os.path.join(cache, "bridge.sock"))
