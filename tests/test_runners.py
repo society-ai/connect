@@ -289,6 +289,33 @@ class BridgeRunsOtherTypesThroughTheirRunner(unittest.TestCase):
         self.assertTrue(turn.owner)
         self.assertIn("what changed today?", turn.prompt)
 
+    def test_the_owners_files_are_downloaded_and_named_in_the_prompt(self):
+        from core import bridge
+        from core.attachments import Fetched
+
+        task = self.frames.owner("what is in this?", chat_id="chat-9")
+        task["message"]["parts"].append({
+            "type": "file", "file": {"name": "plan.pdf", "mimeType": "application/pdf"},
+            "metadata": {"artifact_id": "a1b2c3d4-0000-4000-8000-000000000001", "size": 2048},
+        })
+        calls = []
+
+        async def fake_fetch_all(client, api_url, token, attachments, dest_dir, chat_id=""):
+            calls.append((attachments, dest_dir, chat_id))
+            return [Fetched(a, path=dest_dir / f"a1b2c3d4-{a.name}", size=2048) for a in attachments]
+
+        with mock.patch.object(bridge, "fetch_all", fake_fetch_all):
+            reply = self.deliver(task)
+        self.assertIn("the runner's answer", str(reply))
+        attachments, dest_dir, chat_id = calls[0]
+        self.assertEqual([a.name for a in attachments], ["plan.pdf"])
+        self.assertEqual(dest_dir, pathlib.Path(self.tmp.name) / "files")
+        self.assertEqual(chat_id, "chat-9")
+        prompt = self.turns[0][1].prompt
+        self.assertIn("[Attachments]", prompt)
+        self.assertIn(str(dest_dir / "a1b2c3d4-plan.pdf"), prompt)
+        self.assertNotIn("download_file", prompt)  # a Claude Code bridge tool, not this runtime's
+
     def test_a_contact_is_refused_when_the_runner_cannot_hold_it_to_its_level(self):
         reply = self.deliver(self.frames.contact("hi", permission="act"))
         self.assertIn("can't take requests from contacts", str(reply))

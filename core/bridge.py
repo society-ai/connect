@@ -1214,6 +1214,7 @@ class Bridge:
                             await self._execute_via_runner(
                                 task_id, str(work_item_key), content, standing_text=standing_text,
                                 sender=sender, permission=permission, delivery_chat_id=delivery_chat_id,
+                                attachments=attachments,
                             )
                             return
                         await self._execute_via_session(
@@ -2467,10 +2468,16 @@ class Bridge:
         sender: Sender | None = None,
         permission: str | None = None,
         delivery_chat_id: str | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> None:
         """Run one turn through the agent type's runner (core/runner.py) and complete the A2A task with its
-        reply. core already decided the sender, the conversation and the prompt; the runner only runs it."""
+        reply. core already decided the sender, the conversation and the prompt; the runner only runs it.
+        The message's files are downloaded first and named in the prompt, as for Claude Code sessions."""
         from core.runner import ConversationRef, Turn
+
+        owner = sender is None or sender.is_owner
+        if attachments:
+            content = content + "\n\n" + await self._runner_attachments(attachments, sender, owner, delivery_chat_id)
 
         if delivery_chat_id:
             asyncio.ensure_future(self._report_delivery(delivery_chat_id, "received"))
@@ -2481,7 +2488,7 @@ class Bridge:
                 session = await self._runner.start(ConversationRef(work_item_key, cwd=self.ctx.work_dir))
                 self._runner_sessions[work_item_key] = session
             prompt = f"{standing_text}\n\n{content}" if standing_text else content
-            turn = Turn(task_id, prompt, owner=sender is None or sender.is_owner, permission=permission)
+            turn = Turn(task_id, prompt, owner=owner, permission=permission)
             final, error = None, None
             async for event in self._runner.run(session, turn):
                 if event.kind == "final":
@@ -2496,6 +2503,22 @@ class Bridge:
             await self._send_task_complete(task_id, error, exit_code=1)
         else:
             await self._send_task_complete(task_id, final or "(no reply)")
+
+    async def _runner_attachments(self, attachments: list[Attachment], sender: Sender | None, owner: bool,
+                                  delivery_chat_id: str | None) -> str:
+        """Download a runner turn's files and return the prompt's [Attachments] section. The owner's land in
+        the agent's work folder; a contact's in that contact's own session folder, so one contact's file is
+        never in another's (the same rule as Claude Code sessions)."""
+        if owner or sender is None:
+            base = pathlib.Path(self.ctx.work_dir)
+        else:
+            base = folders.session_dir(sender.group, self.ctx.name, os.getenv("DISPLAY_NAME", "").strip())
+        fetched = await fetch_all(
+            _get_http_client(), self.ctx.api_url, self.ctx.token, attachments, base / FILES_DIRNAME,
+            chat_id=delivery_chat_id or "",
+        )
+        # download_file is a Claude Code bridge tool: other runtimes are not told to use it.
+        return prompt_block(fetched, can_get_file=False, claude_code=False)
 
     async def _execute_via_session(
         self,

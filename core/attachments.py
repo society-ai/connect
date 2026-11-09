@@ -192,9 +192,10 @@ def _human(size: Optional[int]) -> str:
     return ""
 
 
-def prompt_block(results: list[Fetched], can_get_file: bool) -> str:
+def prompt_block(results: list[Fetched], can_get_file: bool, claude_code: bool = True) -> str:
     """The [Attachments] section of the prompt. Names every file, so a file
-    that could not be downloaded is never silently missing."""
+    that could not be downloaded is never silently missing. claude_code: the
+    image hint names Claude Code's Read tool; other runtimes get a plain one."""
     if not results:
         return ""
     lines = ["[Attachments]"]
@@ -203,7 +204,9 @@ def prompt_block(results: list[Fetched], can_get_file: bool) -> str:
         kind = a.mime_type or "unknown type"
         if r.path is not None:
             line = f"- {a.name} ({kind}, {_human(r.size)}): {r.path}"
-            if kind.startswith("image/"):
+            if kind.startswith("image/") and not claude_code:
+                line += " (an image)"
+            elif kind.startswith("image/"):
                 line += " (an image: open it with the Read tool to see it"
                 line += "; it is over Claude's 5 MB image limit, so it may not display)" \
                     if (r.size or 0) > IMAGE_NOTE_BYTES else ")"
