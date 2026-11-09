@@ -348,9 +348,24 @@ async def upload_file(
     if stored is not None:
         return _result(stored)
     # 3. Recorded (measured in storage, then saved like any other artifact).
-    return _result(await api.post("/api/v1/artifacts/complete", {
+    return _result(_saved(await api.post("/api/v1/artifacts/complete", {
         **body, "artifact_id": link["artifact_id"], "file_key": link["file_key"],
-    }))
+    })))
+
+
+SAVED_NOTE = (
+    "Saved to Society AI. When you are answering your owner, the file goes back with your reply and "
+    "shows in their chat: do not paste a link to it."
+)
+
+
+def _saved(answer: Any) -> Any:
+    """The complete answer for the agent, without its signed download url: that link expires within the
+    hour, and agents pasted it into replies next to the file card the bridge already attaches."""
+    if isinstance(answer, dict) and answer.get("artifact_id") and not answer.get("error"):
+        answer = {k: v for k, v in answer.items() if k != "url"}
+        answer["note"] = SAVED_NOTE
+    return answer
 
 
 # A 100 MB video on a slow uplink.

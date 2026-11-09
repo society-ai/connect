@@ -71,12 +71,13 @@ class SaveArtifact(unittest.TestCase):
         if path == "/api/v1/artifacts/upload-url":
             return LINK
         if path == "/api/v1/artifacts/complete":
-            return {"artifact_id": "a1", "size": len(self.data)}
+            return {"artifact_id": "a1", "size": len(self.data), "url": "https://s3.test/a1?signed"}
         raise AssertionError(path)
 
     def test_streams_the_file_to_the_signed_link_then_completes(self):
         out = parsed(asyncio.run(mcp_server.upload_file(self.path, "video/mp4", "clip.mp4", title="Demo")))
-        self.assertEqual(out, {"artifact_id": "a1", "size": len(self.data)})
+        # The signed link expires within the hour: the agent gets a note instead (the file rides the reply).
+        self.assertEqual(out, {"artifact_id": "a1", "size": len(self.data), "note": mcp_server.SAVED_NOTE})
 
         (path1, asked), (path2, done) = [c.args for c in self.post.await_args_list]
         self.assertEqual(path1, "/api/v1/artifacts/upload-url")
