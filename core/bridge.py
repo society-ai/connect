@@ -110,6 +110,10 @@ MAX_RESULT_CHARS = max(1000, int(os.getenv("MAX_RESULT_CHARS", "16000")))
 TOOL_CONCURRENCY_RETRIES = 5  # retries when Claude API returns 400 for tool concurrency
 TOOL_CONCURRENCY_BASE_DELAY = 3  # seconds between retries
 JWT_EXCHANGE_TIMEOUT = 15
+# After an update the new bridge starts before the updater has written how it went: wait
+# this long for the outcome (the updater waits a minute for registration, a rollback another).
+UPDATE_RESULT_WAIT_S = 180.0
+UPDATE_RESULT_POLL_S = 3.0
 HTTP_FETCH_TIMEOUT = 30
 # Composed-dispatch block kinds that are session-scoped standing context:
 # they hold across turns, so a warm session already carries them in its
@@ -1331,12 +1335,16 @@ class Bridge:
         persona = self._derive_persona()
         cmd = [script] + ([persona] if persona else [])
         log_path = os.path.join(self.ctx.state_dir, "update.log")
+        # The version this process runs: when the folder is already on the latest release
+        # (another agent on this machine updated it), the updater still restarts this bridge.
+        env = {**os.environ, "SOCIETY_AI_RUNNING_VERSION": __version__}
         try:
             os.makedirs(self.ctx.state_dir, exist_ok=True)
             with open(log_path, "ab") as log_file:
                 subprocess.Popen(
                     cmd,
                     cwd=repo_dir,
+                    env=env,
                     stdin=subprocess.DEVNULL,
                     stdout=log_file,
                     stderr=log_file,
@@ -1444,9 +1452,19 @@ class Bridge:
         """If update.sh left an outcome marker, post it to the owner's feed
         and delete the marker. Fire-and-forget at startup: never blocks or
         fails the boot, and the marker is only deleted after a successful
-        post so a failed post retries at the next start."""
+        post so a failed post retries at the next start.
+
+        The updater restarts this bridge before it knows the outcome (it waits
+        for the new process to register), so while its pending file is there
+        the outcome is waited for, up to UPDATE_RESULT_WAIT_S."""
         marker = os.path.join(self.ctx.state_dir, "update-result.json")
+        pending = os.path.join(self.ctx.state_dir, "update-pending.json")
         try:
+            waited = 0.0
+            while (not os.path.exists(marker) and os.path.exists(pending)
+                   and waited < UPDATE_RESULT_WAIT_S):
+                await asyncio.sleep(UPDATE_RESULT_POLL_S)
+                waited += UPDATE_RESULT_POLL_S
             if not os.path.exists(marker):
                 return
             try:

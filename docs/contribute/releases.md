@@ -19,6 +19,19 @@ Users install releases, never the main branch: `install.sh` and `./connect updat
 4. Moving Society AI's registry pin to the release is a separate deploy, also with Lior's go
    (`scripts/sync-connect-registry.sh` in the Society AI repo).
 
+## How people get a release
+
+When a bridge connects to Society AI on an older version than the newest release, Society AI puts an
+approval in its owner's inbox, from Society AI: "Update jenkins to 0.31.0". Approving it sends the
+bridge `agent.update`; the bridge waits until no task is running, then runs `./connect update`
+detached. The updater switches the folder to the checked release, restarts that agent's bridge and
+writes the outcome; the restarted bridge posts it to the owner's feed ("Updated from 0.30.1 to
+0.31.0", or that it rolled back). An agent that is offline when its owner approves gets the update
+when it next connects.
+
+Agents on one machine share the folder. The first approval moves the folder to the release; another
+agent's approval then finds it up to date and only restarts that agent's bridge onto it.
+
 ## What installers check
 
 `core/installer/release.sh`, used by `install.sh` and `./connect update`:

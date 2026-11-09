@@ -25,9 +25,14 @@
 #   5. On success, records the outcome. On any failure it puts the old
 #      version back, restarts again, and records what happened.
 #
-# The outcome lands in <state dir>/update-result.json. At its next start
-# the bridge reads that file and posts the result to your feed, so you
-# hear how the update went even though the updated process is a new one.
+# The outcome lands in <state dir>/update-result.json. The restarted bridge
+# waits for it while <state dir>/update-pending.json is there and posts the
+# result to your feed, so you hear how this update went even though the
+# updated process is a new one.
+#
+# When this folder is already on the latest release (another agent on this
+# machine updated it) and the bridge that asked runs an older version
+# (SOCIETY_AI_RUNNING_VERSION, set by the bridge), it is restarted onto it.
 
 set -euo pipefail
 
@@ -49,6 +54,9 @@ else
 fi
 
 MARKER="$STATE_DIR/update-result.json"
+# Written right before a restart, removed with the outcome: the restarted bridge waits for the
+# outcome while it is there, so it posts this update and not the one before.
+PENDING="$STATE_DIR/update-pending.json"
 BRIDGE_OUT_LOG="$STATE_DIR/bridge.log"
 BRIDGE_ERR_LOG="$STATE_DIR/bridge.err.log"
 LOCK_DIR="$REPO_DIR/.update.lock"
@@ -87,7 +95,12 @@ data = {
 with open(path, "w") as f:
     json.dump(data, f)
 PYEOF
+    rm -f "$PENDING"
     echo "    Outcome recorded in $MARKER"
+}
+
+write_pending() {
+    date -u +'{"at": "%Y-%m-%dT%H:%M:%SZ"}' > "$PENDING"
 }
 
 # ── Bridge registration check ──────────────────────────────────────────────
@@ -171,6 +184,7 @@ rollback() {
     fi
 
     echo "    Restarting the bridge on the previous version..."
+    write_pending
     snapshot_bridge_logs
     if ! ./connect service restart ${PERSONA:+"$PERSONA"}; then
         write_marker false "$FROM_LABEL" "$TO_LABEL" \
@@ -263,6 +277,30 @@ TO_LABEL="$(adapter_version)"
 [ -n "$TO_LABEL" ] || TO_LABEL="$(git rev-parse --short HEAD)"
 
 if [ "$TO_SHA" = "$FROM_SHA" ]; then
+    # Another agent on this machine already updated this folder, but the bridge that asked
+    # still runs the version it started with: restart it onto the code here.
+    RUNNING="${SOCIETY_AI_RUNNING_VERSION:-}"
+    if [ -n "$RUNNING" ] && [ "$RUNNING" != "$FROM_LABEL" ]; then
+        step "This folder is already on $FROM_LABEL; restarting the bridge, which runs $RUNNING"
+        write_pending
+        snapshot_bridge_logs
+        if ! ./connect service restart ${PERSONA:+"$PERSONA"}; then
+            write_marker false "$RUNNING" "$FROM_LABEL" "the service did not restart" false
+            exit 1
+        fi
+        VERDICT="$(verify_bridge_connected)"
+        if [ "$VERDICT" = "connected" ]; then
+            write_marker true "$RUNNING" "$FROM_LABEL" "" false
+            echo ""
+            echo "Done! The bridge now runs $FROM_LABEL."
+        else
+            write_marker false "$RUNNING" "$FROM_LABEL" \
+                "the bridge did not confirm registration after the restart ($VERDICT)" false
+            echo "The bridge did not confirm it is connected ($VERDICT). Check the log: $BRIDGE_ERR_LOG"
+            exit 1
+        fi
+        exit 0
+    fi
     echo ""
     echo "Already up to date ($FROM_LABEL). Nothing to do."
     exit 0
@@ -291,6 +329,7 @@ if [ -d agents/claude_code/runner/channel/node_modules ] && command -v npm &>/de
 fi
 
 step "Restarting the bridge on the new version"
+write_pending
 snapshot_bridge_logs
 if ! ./connect service restart ${PERSONA:+"$PERSONA"}; then
     rollback "the service did not restart"
