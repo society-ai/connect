@@ -1958,6 +1958,19 @@ class Bridge:
             logger.exception("session_start failed")
             return None
 
+    async def ipc_session_live(self, params: dict) -> bool:
+        """IPC from the PreToolUse and Notification hooks (hook_live.py): a
+        tool call or a permission prompt in a session, for the Sessions live
+        view. True when this bridge is the machine's tracking runner and took
+        it, so the hook stops there."""
+        if self._tracker is None:
+            return False
+        try:
+            return self._tracker.live_event(params)
+        except Exception:
+            logger.exception("session_live failed")
+            return False
+
     def _adopt_direct_session(self, session_id: str, params: dict) -> None:
         """Register a mirrored direct session with this bridge's shipper when the
         tracking runner (any bridge on this machine) recorded it for this agent."""
@@ -3187,6 +3200,7 @@ def main():
         handlers={
             "mirror_notify": bridge.ipc_mirror_notify,
             "session_start": bridge.ipc_session_start,
+            "session_live": bridge.ipc_session_live,
             "status": bridge.ipc_status,
             "reap_session": bridge.ipc_reap_session,
             "reopen_session": bridge.ipc_reopen_session,

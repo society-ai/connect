@@ -1,11 +1,16 @@
-"""Register the Society AI SessionStart, Stop, and statusLine entries with Claude Code.
+"""Register the Society AI hooks and statusLine entry with Claude Code.
 
-Called by setup.sh — not intended to be run directly.
+Called by setup.sh — not intended to be run directly. The tracking bridge
+also calls ensure_live_hooks() at start, so machines set up before the live
+view get its two hooks without running setup again.
 
 Writes idempotent entries to ~/.claude/settings.json:
-- SessionStart -> hook_session_start.py  (injects state snapshot)
-- Stop         -> hook_stop.py           (reminds about in_progress tasks)
-- statusLine   -> hook_status_line.py    (📥 N · ✅ M · 🔔 K review)
+- SessionStart     -> hook_session_start.py  (injects state snapshot)
+- Stop             -> hook_stop.py           (reminds about in_progress tasks)
+- UserPromptSubmit -> hook_user_prompt.py    (registers and mirrors at once)
+- PreToolUse       -> hook_live.py           (the current action, live view)
+- Notification     -> hook_live.py           (waiting for a permission, live view)
+- statusLine       -> hook_status_line.py    (📥 N · ✅ M · 🔔 K review)
 
 Identifies own entries by their command path containing our script
 filenames, so re-running the script replaces in place rather than
@@ -29,6 +34,9 @@ SESSION_START_SCRIPT = "hook_session_start.py"
 STOP_SCRIPT = "hook_stop.py"
 PROMPT_SCRIPT = "hook_user_prompt.py"
 STATUS_LINE_SCRIPT = "hook_status_line.py"
+LIVE_SCRIPT = "hook_live.py"
+# The live view's hook events (session-trackers §19.3), both on hook_live.py.
+LIVE_EVENTS = ("PreToolUse", "Notification")
 
 # Per-hook timeout in seconds. SessionStart hits the platform with two
 # GETs; 5s is generous for the common case and short enough that a hung
@@ -115,14 +123,54 @@ def _upsert_status_line(data: dict, command: str) -> None:
     data["statusLine"] = {"type": "command", "command": command}
 
 
-def main() -> None:
+def _paths() -> tuple[str, str]:
+    """(venv python, runner folder)."""
     runner_dir = os.path.dirname(os.path.abspath(__file__))
     repo_dir = os.path.abspath(os.path.join(runner_dir, "..", "..", ".."))  # venv/ lives at the repo root
-    venv_py = os.path.join(repo_dir, "venv", "bin", "python")
+    return os.path.join(repo_dir, "venv", "bin", "python"), runner_dir
+
+
+def _has_live_hooks(hooks: dict) -> bool:
+    for event in LIVE_EVENTS:
+        entries = hooks.get(event)
+        if not isinstance(entries, list) or not any(_entry_owns_script(e, LIVE_SCRIPT) for e in entries):
+            return False
+    return True
+
+
+def ensure_live_hooks() -> bool:
+    """Add the live view hooks where the Society AI hooks are already installed
+    (our Stop entry is there) and they are missing. Machines set up before the
+    live view get them this way: updates do not run setup. Leaves settings
+    alone when the owner skipped the hooks or manages them by hand. Returns
+    whether it wrote the settings."""
+    venv_py, runner_dir = _paths()
+    live_script = os.path.join(runner_dir, LIVE_SCRIPT)
+    if not (os.path.isfile(venv_py) and os.path.isfile(live_script)):
+        return False
+    data = _read_settings()
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    stop_entries = hooks.get("Stop")
+    if not isinstance(stop_entries, list) or not any(_entry_owns_script(e, STOP_SCRIPT) for e in stop_entries):
+        return False
+    if _has_live_hooks(hooks):
+        return False
+    for event in LIVE_EVENTS:
+        _upsert_event(hooks, event, f"{venv_py} {live_script}", LIVE_SCRIPT)
+    data["hooks"] = hooks
+    _write_settings(data)
+    return True
+
+
+def main() -> None:
+    venv_py, runner_dir = _paths()
     session_script = os.path.join(runner_dir, SESSION_START_SCRIPT)
     stop_script = os.path.join(runner_dir, STOP_SCRIPT)
     prompt_script = os.path.join(runner_dir, PROMPT_SCRIPT)
     status_script = os.path.join(runner_dir, STATUS_LINE_SCRIPT)
+    live_script = os.path.join(runner_dir, LIVE_SCRIPT)
 
     if not os.path.isfile(venv_py):
         print(
@@ -131,7 +179,7 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(2)
-    for script in (session_script, stop_script, prompt_script, status_script):
+    for script in (session_script, stop_script, prompt_script, status_script, live_script):
         if not os.path.isfile(script):
             print(
                 f"  Error: hook script missing at {script}. Reinstall Society AI Connect.",
@@ -143,6 +191,7 @@ def main() -> None:
     stop_cmd = f"{venv_py} {stop_script}"
     prompt_cmd = f"{venv_py} {prompt_script}"
     status_cmd = f"{venv_py} {status_script}"
+    live_cmd = f"{venv_py} {live_script}"
 
     data = _read_settings()
     hooks = data.setdefault("hooks", {})
@@ -162,12 +211,17 @@ def main() -> None:
     # at turn end. It blocks the turn from starting, so the hook itself only
     # fires one short-timeout IPC and returns; the bridge ships async.
     _upsert_event(hooks, "UserPromptSubmit", prompt_cmd, PROMPT_SCRIPT)
+    # The Sessions live view: the current action (PreToolUse blocks the tool,
+    # so the hook only hands one line to the local bridge) and a permission
+    # prompt (Notification).
+    for event in LIVE_EVENTS:
+        _upsert_event(hooks, event, live_cmd, LIVE_SCRIPT)
     _upsert_status_line(data, status_cmd)
     data["hooks"] = hooks
 
     _write_settings(data)
     print(
-        "  Registered SessionStart + Stop + UserPromptSubmit hooks and statusLine in "
+        "  Registered SessionStart, Stop, UserPromptSubmit, PreToolUse and Notification hooks and statusLine in "
         "~/.claude/settings.json"
     )
 

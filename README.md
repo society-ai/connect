@@ -88,7 +88,9 @@ Each type is a folder in [agents/](agents/). Yours is missing? See [Contributing
 - **Agent types** (`agents/`) are data: a manifest, setup text and owner steps. Society AI loads a pinned,
   released copy, so a new type appears in the app with no app changes.
 - **What leaves your computer:** the messages, your agent's replies, and (if recording is on) the
-  conversation. Never the agent's own tool activity (commands, file paths, file contents) or its thinking.
+  conversation. Never the agent's own tool output, file contents or thinking. With Track my sessions on,
+  the Sessions page also shows what each Claude Code session does right now: one short line per tool
+  call, with its path or command ([details](docs/connect/claude-code.md#live-view)).
 
 ## Contributing
 

@@ -605,9 +605,11 @@ class SessionManager:
     @staticmethod
     def _reply_hook_settings() -> dict:
         """Only the hooks the reply path needs: Stop (a turn ended: ship the
-        transcript and hand the reply back) and UserPromptSubmit (mirror the
-        prompt early). Mirror-only: the owner's task reminders and identity
-        banner never reach a contact session."""
+        transcript and hand the reply back), UserPromptSubmit (mirror the
+        prompt early), and PreToolUse and Notification (the live view's
+        current action and permission prompts, session-trackers §19.3).
+        Mirror-only: the owner's task reminders and identity banner never
+        reach a contact session."""
         py = _shq(sys.executable)
 
         def hook(script: str, *args: str) -> list:
@@ -617,6 +619,8 @@ class SessionManager:
         return {"hooks": {
             "Stop": hook("hook_stop.py", "--mirror-only"),
             "UserPromptSubmit": hook("hook_user_prompt.py"),
+            "PreToolUse": hook("hook_live.py"),
+            "Notification": hook("hook_live.py"),
         }}
 
     def _channel_mcp_config(self, rec: SessionRecord) -> dict:

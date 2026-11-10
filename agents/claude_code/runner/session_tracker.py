@@ -15,6 +15,10 @@ What it does on this machine:
 - Sends facts after each prompt and turn end, without a model: running,
   activity, turn count, the checklist from Claude Code's task tools, git state
   and the Jump in link (§16.5).
+- Sends live state for the Sessions live view (§19): whether a turn runs, since
+  when, the current action with its path or command, the last five actions and
+  whether Claude Code waits for a permission. Batched per account, only what
+  changed, at most every 5 seconds (session_live.py keeps the state).
 - Runs Trackers when this machine's runtime (Claude Code) is the one the owner
   chose: it asks the server for jobs, runs each with a small model (claude -p,
   Haiku, no tools, no MCP, no settings, no saved session) and sends the output
@@ -49,6 +53,8 @@ from typing import Any, Optional
 import certifi
 import httpx
 
+from agents.claude_code.runner.session_live import LiveBoard
+
 logger = logging.getLogger("session_tracker")
 
 BASE_DIR = pathlib.Path(os.path.expanduser("~")) / ".cache" / "society-ai" / "tracker"
@@ -71,6 +77,11 @@ FEED_POLL_S = 20.0          # how often to ask for Tracker jobs
 FEED_AFTER_TURN_S = 8.0     # ask soon after a turn ends on this machine
 FEED_MAX_JOBS = 3
 RUNTIME = "claude_code"
+LIVE_INTERVAL_S = 5.0       # per account, at most one live batch this often
+LIVE_TICK_S = 1.0
+LIVE_BATCH = 50             # sessions per live batch (the route's limit)
+LIVE_BACKOFF_S = 10.0       # first wait after a 429 without Retry-After
+LIVE_BACKOFF_MAX_S = 120.0
 
 _NOISE_PREFIXES = (
     "<system-reminder>", "<task-notification>", "<command-", "<local-command",
@@ -298,6 +309,21 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def folder_skipped(cwd: Optional[str], skip_folders: list) -> bool:
+    """Whether `cwd` is a skipped folder or inside one (~/ is this machine's home)."""
+    if not cwd:
+        return False
+    path = cwd.rstrip("/") or "/"
+    home = os.path.expanduser("~").rstrip("/")
+    for folder in skip_folders or []:
+        target = str(folder).rstrip("/")
+        if target.startswith("~/"):
+            target = home + target[1:]
+        if target and (path == target or path.startswith(target + "/")):
+            return True
+    return False
+
+
 # ── The runner ────────────────────────────────────────────────────────────
 
 class SessionTrackerRunner:
@@ -321,6 +347,12 @@ class SessionTrackerRunner:
         self._wake = asyncio.Event()
         self._state: dict[str, Any] = {"sessions": {}}
         self._client: Optional[httpx.AsyncClient] = None
+        # Live view (§19): state per session, and per account when it may send next.
+        self._live = LiveBoard()
+        self._live_wake = asyncio.Event()
+        self._live_off = False      # the router has no live route: off until a restart
+        self._live_accounts: dict[str, dict] = {}
+        self._clock = time.monotonic
         self.running = True
 
     # -- hook events (any bridge; only the lock holder acts) --
@@ -336,6 +368,11 @@ class SessionTrackerRunner:
             # Society AI updates for the Lead stay on the agent's side (no Tracker, no chat).
             return
         event = "stop" if str(params.get("event") or "stop") == "stop" else "prompt"
+        if event == "stop":
+            self._live.stop(sid)
+        else:
+            self._live.prompt(sid)
+        self._live_wake.set()
         prev = self._pending.get(sid, {})
         merged_event = "stop" if "stop" in (event, prev.get("event")) else "prompt"
         delay = STOP_DELAY_S if event == "stop" else PROMPT_DELAY_S
@@ -351,6 +388,26 @@ class SessionTrackerRunner:
             # its Tracker job is ready a few seconds later.
             self._feed_due = min(self._feed_due, time.monotonic() + FEED_AFTER_TURN_S)
             self._feed_wake.set()
+
+    def live_event(self, params: dict) -> bool:
+        """A tool call or a permission prompt in a session (hook_live.py).
+        Kept in memory and sent with the next live batch; never blocks the
+        hook. False when this bridge is not the machine's runner."""
+        if self._lock_fd is None:
+            return False
+        sid = str(params.get("session_id") or "")
+        cwd = str(params.get("cwd") or "")
+        if not sid or cwd.startswith(str(BASE_DIR)):
+            return True
+        event = params.get("event")
+        if event == "tool":
+            self._live.tool(sid, str(params.get("action") or ""))
+        elif event == "permission":
+            self._live.permission(sid)
+        else:
+            return True
+        self._live_wake.set()
+        return True
 
     async def session_start(self, params: dict) -> Optional[dict]:
         """The first message of a session started in Claude Code (the hook's
@@ -396,11 +453,19 @@ class SessionTrackerRunner:
             return
         logger.info("Session tracking: this bridge (%s) tracks sessions on this machine", self._persona)
         self._load_state()
+        try:
+            from agents.claude_code.runner.configure_hooks import ensure_live_hooks
+            if ensure_live_hooks():
+                logger.info("Added the live view hooks (PreToolUse, Notification) to ~/.claude/settings.json")
+        except Exception:
+            logger.exception("Could not add the live view hooks")
         feed = asyncio.ensure_future(self._feed_loop())
+        live = asyncio.ensure_future(self._live_loop())
         try:
             await self._facts_loop()
         finally:
             feed.cancel()
+            live.cancel()
 
     async def _facts_loop(self) -> None:
         while self.running:
@@ -418,6 +483,7 @@ class SessionTrackerRunner:
         self.running = False
         self._wake.set()
         self._feed_wake.set()
+        self._live_wake.set()
 
     def _try_lock(self) -> bool:
         fd = os.open(BASE_DIR / "runner.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -708,6 +774,124 @@ class SessionTrackerRunner:
         else:
             logger.warning("Tracker facts for %s returned %s", sid[:8], status)
         self._save_state()
+
+    # -- live view (§19.3) --
+
+    async def _live_loop(self) -> None:
+        while self.running and not self._live_off:
+            try:
+                await self._live_flush()
+            except Exception:
+                logger.exception("Session live loop error")
+            try:
+                await asyncio.wait_for(self._live_wake.wait(), timeout=LIVE_TICK_S)
+            except asyncio.TimeoutError:
+                pass
+            self._live_wake.clear()
+
+    def _live_target(self, sid: str) -> Optional[str]:
+        """The agent whose owner's Tracker gets this session's live state, or
+        None when the session is not one this runner tracks."""
+        st = self._state["sessions"].get(sid)
+        if not st or sid in self._refused or "tracker_id" not in st or not st.get("agent"):
+            return None
+        if st.get("reason") == "stopped":
+            return None
+        return st["agent"]
+
+    async def _live_flush(self) -> int:
+        """Send every account's changed sessions, at most one batch per account
+        every LIVE_INTERVAL_S. Returns the sessions sent."""
+        if self._live_off:
+            return 0
+        board = self._live
+        for sid in board.heartbeat_due():
+            board.beat(sid, running_session(sid) is not None)
+        board.prune()
+        # owner (Tracker agent) -> (an agent of that account, its sessions)
+        groups: dict[str, tuple[str, list[str]]] = {}
+        for sid in board.dirty():
+            agent = self._live_target(sid)
+            if agent is None:
+                continue
+            config = await self._config_for(agent)
+            if not config or not config.get("tracking"):
+                continue
+            st = self._state["sessions"][sid]
+            if st.get("origin") == "direct" or st.get("mirrored"):
+                # Sessions started in Claude Code: the same switch and skipped folders as registering.
+                if config.get("claude_code_sessions") is False:
+                    continue
+                if folder_skipped(st.get("cwd"), config.get("skip_folders") or []):
+                    continue
+            if not await self._tracker_token(agent):
+                continue
+            owner = (self._identities.get(agent) or {}).get("agent_name") or agent
+            groups.setdefault(owner, (agent, []))[1].append(sid)
+
+        sent = 0
+        now = self._clock()
+        for owner, (agent, sids) in groups.items():
+            account = self._live_accounts.setdefault(owner, {"next_at": 0.0, "backoff": 0.0})
+            if now < account["next_at"]:
+                continue  # coalesced: the newest state goes with the next batch
+            account["next_at"] = now + LIVE_INTERVAL_S
+            for i in range(0, len(sids), LIVE_BATCH):
+                batch = [board.payload(sid) for sid in sids[i:i + LIVE_BATCH]]
+                status, retry_after = await self._post_live(
+                    agent, {"host": self._host, "sessions": [body for _, body in batch]},
+                )
+                if status == 200:
+                    for (rev, body) in batch:
+                        board.sent(body["external_session_id"], rev)
+                    sent += len(batch)
+                    account["backoff"] = 0.0
+                    continue
+                if status == 404:
+                    self._live_off = True
+                    logger.info("Society AI has no live view route yet: live updates are off until a restart")
+                    return sent
+                if status == 429:
+                    wait = retry_after or min(max(account["backoff"] * 2, LIVE_BACKOFF_S), LIVE_BACKOFF_MAX_S)
+                    account["backoff"] = wait
+                    account["next_at"] = self._clock() + wait
+                    logger.info("Live updates for %s's account are rate limited; next try in %.0fs", agent, wait)
+                    break
+                if status in (400, 422):
+                    # Refused as it is: dropped, the session's next change is sent anew.
+                    logger.warning("Live update for %s's account was refused (%s)", agent, status)
+                    for (rev, body) in batch:
+                        board.sent(body["external_session_id"], rev)
+                    continue
+                logger.warning("Live update for %s's account returned %s; tried again", agent, status)
+                break
+        return sent
+
+    async def _post_live(self, agent: str, body: dict) -> tuple[int, Optional[float]]:
+        """POST one live batch as the agent's owner's Tracker agent: (status,
+        Retry-After seconds). Status 0 when it could not be sent."""
+        token = await self._tracker_token(agent)
+        if not token:
+            return 0, None
+        try:
+            r = await self._http().post(
+                "/api/v1/session-trackers/live", json=body,
+                headers={"Authorization": f"Bearer {token}"}, timeout=10.0,
+            )
+        except httpx.HTTPError as e:
+            logger.warning("Live update for %s's account failed: %s", agent, e)
+            return 0, None
+        if r.status_code == 401:
+            # Revoked by the owner: forget it and ask again next time.
+            self._identities.pop(agent, None)
+            self._save_identities()
+        retry_after = None
+        try:
+            retry_after = max(1.0, min(float(r.headers.get("retry-after") or 0), LIVE_BACKOFF_MAX_S)) \
+                if r.headers.get("retry-after") else None
+        except ValueError:
+            retry_after = None
+        return r.status_code, retry_after
 
     # -- the server feed (§16.4) --
 

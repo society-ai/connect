@@ -901,13 +901,14 @@ os.replace(tmp, path)
 print("  Removed the legacy Society AI section (protocol now arrives with dispatches)")
 PYEOF
 
-# 6. Install Society AI hooks (SessionStart + Stop) so Claude Code gets
-# ambient awareness of open tasks and inbox without needing to remember
-# to ask. Idempotent (replaces in place). Skip on SKIP_HOOKS=1 for users
+# 6. Install Society AI hooks (SessionStart, Stop, UserPromptSubmit, PreToolUse,
+# Notification) so Claude Code gets ambient awareness of open tasks and inbox
+# without needing to remember to ask, and the Sessions live view sees what
+# each session does. Idempotent (replaces in place). Skip on SKIP_HOOKS=1 for users
 # who manage ~/.claude/settings.json by hand.
 echo ""
 echo "[6/7] Giving Claude Code awareness of your Society AI tasks..."
-echo "      (installs the SessionStart and Stop hooks)"
+echo "      (installs the Society AI hooks for Claude Code)"
 
 if [ "${SKIP_HOOKS:-}" = "1" ]; then
     echo "  Skipped (SKIP_HOOKS=1)"
