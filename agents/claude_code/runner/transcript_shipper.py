@@ -52,6 +52,7 @@ import os
 import pathlib
 import re
 import socket
+import time
 from itertools import islice
 from typing import Any, Optional
 
@@ -71,6 +72,23 @@ MAX_STR_CHARS = 4000
 MAX_COLLECTION_ITEMS = 100
 MAX_READ_BYTES = 8 * 1024 * 1024   # per ship() call; the rest ships next turn
 MAX_TRACKED_SESSIONS = 200
+
+# A firewall in front of the platform (the WAF on its load balancer) can
+# refuse a batch for what is IN it: transcript text full of shell commands,
+# local URLs and ../ paths reads as an attack to its managed rules. It answers
+# with its own HTML page, never the platform's JSON, and it refuses the same
+# bytes every time. Re-sending them held the session's cursor forever, so no
+# later turn shipped either (one session re-sent one batch ~17,000 times).
+# Such a batch is split until the refused entries are found; each ships as
+# this note instead, and the rest of the conversation moves on.
+REFUSED_ENTRY_NOTE = (
+    "[Not mirrored: a firewall in front of Society AI refused this message. "
+    "It is still in the session's transcript on its machine.]"
+)
+
+# Any other failed ship is retried by the retry loop, at most this often.
+RETRY_BACKOFF_FIRST = 120.0
+RETRY_BACKOFF_MAX = 3600.0
 
 _PROJECTS_DIR = pathlib.Path.home() / ".claude" / "projects"
 
@@ -230,6 +248,39 @@ def _stopped(response: httpx.Response) -> bool:
         return False
 
 
+def _refused_for_content(response: httpx.Response) -> bool:
+    """The batch itself was refused, so sending it again cannot help: too
+    large (413), entries the platform cannot take (422), or a 403 that is not
+    the platform's JSON (a firewall's page). The platform's own 403s are JSON
+    and about the token, so those are retried."""
+    if response.status_code in (413, 422):
+        return True
+    if response.status_code != 403:
+        return False
+    try:
+        response.json()
+    except ValueError:
+        return True
+    return False
+
+
+def _refused_note(entry: dict) -> dict:
+    """The entry with its text replaced by REFUSED_ENTRY_NOTE. Same seq, so
+    the platform's dedup still holds."""
+    content = entry.get("content") if isinstance(entry.get("content"), dict) else {}
+    key = "summary" if entry.get("entry_type") == "summary" else "text"
+    note = {k: v for k, v in entry.items() if k != "content"}
+    note["content"] = {**{k: v for k, v in content.items() if k not in ("text", "summary")},
+                       key: REFUSED_ENTRY_NOTE}
+    return note
+
+
+def _body_excerpt(text: str, n: int = 120) -> str:
+    """A refusal body for the log: tags and whitespace collapsed (a firewall
+    page is HTML), clipped."""
+    return " ".join(re.sub(r"<[^>]+>", " ", text or "").split())[:n]
+
+
 class TranscriptShipper:
     """Per-bridge shipper. One instance per persona/bridge process."""
 
@@ -344,29 +395,65 @@ class TranscriptShipper:
                 return True  # nothing new, nothing to flip
 
             # Chunk to the server's batch cap; status rides the last chunk so
-            # 'ended' lands only after all content is in. On any failure the
+            # 'ended' lands only after all content is in. On a failure the
             # cursor stays put and the whole delta re-ships next time — the
-            # server dedups on (mirror, seq), so retries are free.
+            # server dedups on (mirror, seq), so retries are free. A batch
+            # refused for its content never fails here: _ship_chunk ships its
+            # refused entries as notes.
             chunks = [entries[i:i + MAX_ENTRIES_PER_BATCH]
                       for i in range(0, len(entries), MAX_ENTRIES_PER_BATCH)] or [[]]
             for i, chunk in enumerate(chunks):
                 is_last = i == len(chunks) - 1
-                ok = await self._post_batch(
+                outcome = await self._ship_chunk(
                     session_id, meta, chunk, status=status if is_last else None
                 )
-                if not ok:
-                    # Status flips must not be lost — the session_ended wake
-                    # (and the Scribe) depend on them. Park for retry.
-                    if status:
-                        meta["pending_status"] = status
+                if outcome != "ok":
+                    if outcome == "failed":
+                        # Status flips must not be lost — the session_ended
+                        # wake (and the Scribe) depend on them. Park for retry.
+                        if status:
+                            meta["pending_status"] = status
+                        fails = int(meta.get("fail_count", 0)) + 1
+                        meta["fail_count"] = fails
+                        meta["retry_at"] = time.time() + min(
+                            RETRY_BACKOFF_FIRST * 2 ** (fails - 1), RETRY_BACKOFF_MAX)
                         self._save_state()
                     return False
 
             meta["pos"] = new_pos
             meta["seq"] = new_seq
-            meta.pop("pending_status", None)
+            for k in ("pending_status", "fail_count", "retry_at"):
+                meta.pop(k, None)
             self._save_state()
             return True
+
+    async def _ship_chunk(
+        self, session_id: str, meta: dict, chunk: list[dict], *, status: Optional[str]
+    ) -> str:
+        """Post one chunk. When it is refused for its content, split it in
+        halves until the refused entries are found and ship each as a note
+        (REFUSED_ENTRY_NOTE). Returns 'ok', 'stopped' or 'failed'."""
+        outcome = await self._post_batch(session_id, meta, chunk, status=status)
+        if outcome != "refused":
+            return outcome
+        if len(chunk) > 1:
+            mid = len(chunk) // 2
+            first = await self._ship_chunk(session_id, meta, chunk[:mid], status=None)
+            if first != "ok":
+                return first
+            return await self._ship_chunk(session_id, meta, chunk[mid:], status=status)
+        if len(chunk) == 1:
+            logger.warning("mirror entry %s of %s was refused for its content; shipped as a note",
+                           chunk[0].get("seq"), session_id[:8])
+            outcome = await self._post_batch(
+                session_id, meta, [_refused_note(chunk[0])], status=status)
+            if outcome != "refused":
+                return outcome
+        # Even the note, or a status flip with no entries, was refused: the
+        # conversation is not the cause, so try again later.
+        logger.warning("mirror ship for %s refused with no entry to blame; retrying later",
+                       session_id[:8])
+        return "failed"
 
     def park_status(self, session_id: str, status: str) -> None:
         """Durably record a status flip without shipping (shutdown path —
@@ -378,9 +465,13 @@ class TranscriptShipper:
 
     async def retry_pending(self) -> int:
         """Re-ship sessions whose status flip (or delta) failed earlier.
-        Called at bridge start and periodically. Returns retries attempted."""
+        Called at bridge start and periodically; a session whose ships keep
+        failing waits longer each time (up to RETRY_BACKOFF_MAX). Returns
+        retries attempted."""
         attempted = 0
-        for sid in [s for s, m in self._state.items() if m.get("pending_status")]:
+        now = time.time()
+        for sid in [s for s, m in self._state.items()
+                    if m.get("pending_status") and float(m.get("retry_at", 0)) <= now]:
             attempted += 1
             await self.ship(sid)
         return attempted
@@ -475,7 +566,10 @@ class TranscriptShipper:
 
     async def _post_batch(
         self, session_id: str, meta: dict, entries: list[dict], *, status: Optional[str]
-    ) -> bool:
+    ) -> str:
+        """POST one batch. Returns 'ok', 'stopped' (the owner stopped
+        mirroring: the session is forgotten), 'refused' (refused for its
+        content, see _refused_for_content) or 'failed' (try again later)."""
         body: dict[str, Any] = {
             "claude_session_id": session_id,
             "machine": self._machine,
@@ -503,13 +597,17 @@ class TranscriptShipper:
                 # stay on this machine.
                 logger.info("mirroring stopped for %s; no longer shipped", session_id[:8])
                 self.forget(session_id)
-                return False
+                return "stopped"
+            if _refused_for_content(r):
+                logger.info("mirror batch of %d entries for %s refused for its content: %s %s",
+                            len(entries), session_id[:8], r.status_code, _body_excerpt(r.text))
+                return "refused"
             if r.status_code >= 400:
                 logger.warning(
                     "mirror ship rejected for %s: %s %s",
-                    session_id[:8], r.status_code, r.text[:200],
+                    session_id[:8], r.status_code, _body_excerpt(r.text, 200),
                 )
-                return False
+                return "failed"
             # The platform reports which chat this session projects into;
             # surface it once so the bridge can alias chat sends → session.
             try:
@@ -525,10 +623,10 @@ class TranscriptShipper:
                     except Exception:
                         logger.exception("on_chat_link callback failed")
             logger.debug("shipped %d entries for %s", len(entries), session_id[:8])
-            return True
+            return "ok"
         except httpx.HTTPError as e:
             logger.warning("mirror ship failed for %s: %s", session_id[:8], e)
-            return False
+            return "failed"
 
     # -- state persistence ---------------------------------------------------------
 

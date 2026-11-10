@@ -223,6 +223,76 @@ class Shipping(unittest.TestCase):
         self.assertFalse(asyncio.run(self.shipper.ship("s1")))
         self.assertTrue(self.shipper.is_registered("s1"))
 
+    FIREWALL_PAGE = "<html>\n<head><title>403 Forbidden</title></head>\n<body>\n<center><h1>403 Forbidden</h1></center>\n</body>\n</html>\n"
+
+    def firewall(self, accepted, blocked="../"):
+        """A firewall that refuses any batch whose text contains `blocked`,
+        in front of a platform that keeps what it accepts."""
+        def handler(request):
+            body = json.loads(request.content)
+            if blocked in json.dumps(body["entries"]):
+                return httpx.Response(403, text=self.FIREWALL_PAGE, headers={"content-type": "text/html"})
+            accepted.extend(body["entries"])
+            return httpx.Response(200, json={})
+        return handler
+
+    def test_a_firewall_refusal_ships_the_refused_entry_as_a_note_and_moves_on(self):
+        texts = ["first", "see [bridge.py](../core/bridge.py)", "third", "fourth"]
+        self.transcript.write_text("".join(json.dumps(_record(t)) + "\n" for t in texts))
+        accepted: list = []
+        self.shipper._client = httpx.AsyncClient(transport=httpx.MockTransport(self.firewall(accepted)))
+        self.assertTrue(asyncio.run(self.shipper.ship("s1", status="active")))
+        by_seq = {e["seq"]: e["content"]["text"] for e in accepted}
+        self.assertEqual(by_seq, {0: "first", 1: ts.REFUSED_ENTRY_NOTE, 2: "third", 3: "fourth"})
+        meta = self.shipper._state["s1"]
+        self.assertEqual((meta["pos"], meta["seq"]), (self.transcript.stat().st_size, 4))
+        self.assertNotIn("pending_status", meta)
+        # Nothing is re-sent: the next ship has nothing new.
+        accepted.clear()
+        self.assertTrue(asyncio.run(self.shipper.ship("s1")))
+        self.assertEqual(accepted, [])
+
+    def test_the_platforms_own_403_is_not_split(self):
+        self.transcript.write_text("".join(json.dumps(_record(t)) + "\n" for t in ("a", "b")))
+        calls: list = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(403, json={"detail": "token revoked"})
+        self.shipper._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.assertFalse(asyncio.run(self.shipper.ship("s1", status="active")))
+        self.assertEqual(len(calls), 1)
+        meta = self.shipper._state["s1"]
+        self.assertEqual((meta["pos"], meta["pending_status"], meta["fail_count"]), (0, "active", 1))
+
+    def test_a_failing_session_waits_longer_before_each_retry(self):
+        calls: list = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(503, text="unavailable")
+        self.shipper._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with mock.patch.object(ts.time, "time", return_value=1000.0):
+            self.assertFalse(asyncio.run(self.shipper.ship("s1", status="ended")))
+            self.assertEqual(self.shipper._state["s1"]["retry_at"], 1000.0 + ts.RETRY_BACKOFF_FIRST)
+            self.assertEqual(asyncio.run(self.shipper.retry_pending()), 0)  # still waiting
+        with mock.patch.object(ts.time, "time", return_value=1000.0 + ts.RETRY_BACKOFF_FIRST):
+            self.assertEqual(asyncio.run(self.shipper.retry_pending()), 1)
+            self.assertEqual(self.shipper._state["s1"]["retry_at"],
+                             1000.0 + 3 * ts.RETRY_BACKOFF_FIRST)  # doubled
+        self.assertEqual(len(calls), 2)
+        self.shipper._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+        with mock.patch.object(ts.time, "time", return_value=10_000.0):
+            self.assertEqual(asyncio.run(self.shipper.retry_pending()), 1)
+        meta = self.shipper._state["s1"]
+        self.assertFalse({"pending_status", "fail_count", "retry_at"} & set(meta))
+
+    def test_a_refused_status_flip_with_no_entries_retries_later(self):
+        handler = lambda request: httpx.Response(403, text=self.FIREWALL_PAGE)  # noqa: E731
+        self.shipper._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.assertFalse(asyncio.run(self.shipper.ship("s1", status="ended")))
+        self.assertEqual(self.shipper._state["s1"]["pending_status"], "ended")
+
 
 class StopTool(unittest.TestCase):
     def test_finds_its_own_session_and_stops_it(self):
