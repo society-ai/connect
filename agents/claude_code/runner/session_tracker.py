@@ -16,9 +16,9 @@ What it does on this machine:
   activity, turn count, the checklist from Claude Code's task tools, git state
   and the Jump in link (§16.5).
 - Sends live state for the Sessions live view (§19): whether a turn runs, since
-  when, the current action with its path or command, the last five actions and
-  whether Claude Code waits for a permission. Batched per account, only what
-  changed, at most every 5 seconds (session_live.py keeps the state).
+  when, and whether Claude Code waits for a permission. Nothing about a tool
+  call: the PreToolUse hook only says a tool started. Batched per account,
+  only what changed, at most every 5 seconds (session_live.py keeps the state).
 - Runs Trackers when this machine's runtime (Claude Code) is the one the owner
   chose: it asks the server for jobs, runs each with a small model (claude -p,
   Haiku, no tools, no MCP, no settings, no saved session) and sends the output
@@ -390,9 +390,10 @@ class SessionTrackerRunner:
             self._feed_wake.set()
 
     def live_event(self, params: dict) -> bool:
-        """A tool call or a permission prompt in a session (hook_live.py).
+        """A tool start or a permission prompt in a session (hook_live.py).
         Kept in memory and sent with the next live batch; never blocks the
-        hook. False when this bridge is not the machine's runner."""
+        hook. Any other params are ignored: nothing about a tool call is
+        kept. False when this bridge is not the machine's runner."""
         if self._lock_fd is None:
             return False
         sid = str(params.get("session_id") or "")
@@ -401,7 +402,7 @@ class SessionTrackerRunner:
             return True
         event = params.get("event")
         if event == "tool":
-            self._live.tool(sid, str(params.get("action") or ""))
+            self._live.tool(sid)
         elif event == "permission":
             self._live.permission(sid)
         else:

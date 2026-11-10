@@ -903,8 +903,8 @@ PYEOF
 
 # 6. Install Society AI hooks (SessionStart, Stop, UserPromptSubmit, PreToolUse,
 # Notification) so Claude Code gets ambient awareness of open tasks and inbox
-# without needing to remember to ask, and the Sessions live view sees what
-# each session does. Idempotent (replaces in place). Skip on SKIP_HOOKS=1 for users
+# without needing to remember to ask, and the Sessions live view knows whether
+# each session is working or waits for a permission (nothing about the tools). Idempotent (replaces in place). Skip on SKIP_HOOKS=1 for users
 # who manage ~/.claude/settings.json by hand.
 echo ""
 echo "[6/7] Giving Claude Code awareness of your Society AI tasks..."

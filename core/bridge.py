@@ -1960,7 +1960,7 @@ class Bridge:
 
     async def ipc_session_live(self, params: dict) -> bool:
         """IPC from the PreToolUse and Notification hooks (hook_live.py): a
-        tool call or a permission prompt in a session, for the Sessions live
+        tool start (nothing about the tool) or a permission prompt in a session, for the Sessions live
         view. True when this bridge is the machine's tracking runner and took
         it, so the hook stops there."""
         if self._tracker is None:

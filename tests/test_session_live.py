@@ -1,11 +1,13 @@
 """Sessions live view (Society AI design: session-trackers §19.3).
 
-- hook_live.py: each tool call becomes one action line, with paths relative to
-  the session's folder and commands shown (credentials masked), clipped to 200
-  characters; a permission Notification says the session waits.
-- LiveBoard: a prompt starts the turn's clock, a tool call sets the current
-  action and the last five, Stop clears the action, a permission waits until
-  the next tool call or Stop; only changed sessions are sent again.
+- hook_live.py: PreToolUse only says a tool started (no tool name, input,
+  command, path, URL or pattern); a permission Notification says the session
+  waits.
+- LiveBoard: a prompt starts the turn's clock, a tool start means "working"
+  (clears a permission wait, starts a turn the prompt hook missed), Stop goes
+  idle, a permission waits until the next tool start or Stop; only changed
+  sessions are sent again, and repeated tool starts change nothing.
+- Nothing about a tool call is ever sent: a payload has exactly four fields.
 - The runner's live sender: one batch per account, only tracked sessions, at
   most every 5 seconds, the newest state coalesced; a 429 waits (Retry-After,
   else a growing wait) and keeps the state; a 404 turns live updates off
@@ -33,65 +35,40 @@ from agents.claude_code.runner import session_live as sl  # noqa: E402
 from agents.claude_code.runner import session_tracker as st  # noqa: E402
 
 
-class ActionLines(unittest.TestCase):
+TOOL_CALLS = [
+    ("Bash", {"command": "curl -H 'Authorization: Bearer abcdefghijklmnop1234' https://u:hunter2@api.x/y?token=zzz"}),
+    ("Edit", {"file_path": "/Users/me/Coding/app/lib/secret_plan.ts", "old_string": "a", "new_string": "b"}),
+    ("Read", {"file_path": "/Users/me/Coding/app/README.md"}),
+    ("Grep", {"pattern": "def private_pattern", "path": "src"}),
+    ("WebFetch", {"url": "https://example.com/docs?key=k123"}),
+    ("WebSearch", {"query": "my private query"}),
+    ("Agent", {"description": "Review the diff", "prompt": "long"}),
+    ("mcp__society-ai__upload_file", {"path": "x"}),
+]
+# Text that must never appear in anything the hook or the board passes on.
+TOOL_TEXT = ["Bash", "curl", "Bearer", "abcdefghijklmnop1234", "hunter2", "zzz", "api.x", "Edit",
+             "secret_plan", "lib/", "README", "Read", "Grep", "private_pattern", "src", "WebFetch",
+             "example.com", "k123", "WebSearch", "private query", "Agent", "Review the diff",
+             "upload_file", "mcp__", "Running", "Editing", "Reading", "Searching", "Fetching", "Using"]
+
+
+class Hook(unittest.TestCase):
     CWD = "/Users/me/Coding/app"
 
-    def line(self, tool, inp, cwd=CWD):
-        return hook_live.action_line(tool, inp, cwd)
+    def test_no_action_text_helpers_remain(self):
+        for name in ("action_line", "clip", "_rel", "_mask", "_SECRETS", "MAX_CHARS"):
+            self.assertFalse(hasattr(hook_live, name), name)
 
-    def test_each_tool(self):
-        cases = [
-            ("Bash", {"command": "pytest agent_router/tests/unit -q"}, "Running pytest agent_router/tests/unit -q"),
-            ("Edit", {"file_path": f"{self.CWD}/lib/x.ts"}, "Editing lib/x.ts"),
-            ("MultiEdit", {"file_path": f"{self.CWD}/a.py"}, "Editing a.py"),
-            ("Write", {"file_path": "/etc/hosts"}, "Editing /etc/hosts"),
-            ("Read", {"file_path": f"{self.CWD}/README.md"}, "Reading README.md"),
-            ("Grep", {"pattern": "def main", "path": "src"}, "Searching def main"),
-            ("Glob", {"pattern": "**/*.py"}, "Searching **/*.py"),
-            ("WebFetch", {"url": "https://example.com/docs"}, "Fetching https://example.com/docs"),
-            ("WebSearch", {"query": "claude code hooks"}, "Searching the web: claude code hooks"),
-            ("Task", {"description": "Find callers", "prompt": "long"}, "Asking a subagent: Find callers"),
-            ("Agent", {"description": "Review the diff"}, "Asking a subagent: Review the diff"),
-            ("TodoWrite", {"todos": []}, "Updating the checklist"),
-            ("TaskCreate", {"subject": "x"}, "Updating the checklist"),
-            ("TaskUpdate", {"taskId": "1"}, "Updating the checklist"),
-            ("mcp__society-ai__upload_file", {"path": "x"}, "Using mcp__society-ai__upload_file"),
-            ("LSP", {}, "Using LSP"),
-        ]
-        for tool, inp, want in cases:
+    def test_a_tool_start_carries_nothing_about_the_tool(self):
+        for tool, inp in TOOL_CALLS:
             with self.subTest(tool=tool):
-                self.assertEqual(self.line(tool, inp), want)
-
-    def test_paths_outside_or_without_a_folder_stay_whole(self):
-        self.assertEqual(self.line("Read", {"file_path": "/Users/me/Coding/application/x"}),
-                         "Reading /Users/me/Coding/application/x")
-        self.assertEqual(self.line("Read", {"file_path": f"{self.CWD}/x"}, cwd=None), f"Reading {self.CWD}/x")
-        self.assertEqual(self.line("Read", {"file_path": "rel/x"}), "Reading rel/x")
-
-    def test_missing_input_still_says_something(self):
-        self.assertEqual(self.line("Bash", {}), "Running a command")
-        self.assertEqual(self.line("Edit", None), "Editing a file")
-        self.assertEqual(self.line("", {}), "Using a tool")
-
-    def test_one_line_clipped_to_200(self):
-        line = self.line("Bash", {"command": "echo " + "x" * 500 + "\nsecond line"})
-        self.assertEqual(len(line), 200)
-        self.assertTrue(line.endswith("…"))
-        self.assertNotIn("\n", self.line("Bash", {"command": "a &&\n  b"}))
-        self.assertEqual(self.line("Bash", {"command": "a &&\n  b"}), "Running a && b")
-
-    def test_credentials_in_commands_and_urls_are_masked(self):
-        line = self.line("Bash", {"command": 'curl -H "Authorization: Bearer abcdefghijklmnop1234" '
-                                             "https://u:hunter2@api.x/y?token=zzz&x=1"})
-        for secret in ("abcdefghijklmnop1234", "hunter2", "zzz"):
-            self.assertNotIn(secret, line)
-        self.assertIn("x=1", line)
-        line = self.line("Bash", {"command": "SOCIETY_AI_AUTH_TOKEN=sai_0123456789abcdefXYZ ./run && echo sai_0123456789abcdefXYZ"})
-        self.assertNotIn("0123456789abcdef", line)
-        self.assertIn("./run", line)
-        # Paths are shown as they are.
-        self.assertEqual(self.line("Edit", {"file_path": f"{self.CWD}/sai_helpers_and_more_things.py"}),
-                         "Editing sai_helpers_and_more_things.py")
+                params = hook_live.live_params({
+                    "hook_event_name": "PreToolUse", "session_id": "s1", "cwd": self.CWD,
+                    "tool_name": tool, "tool_input": inp, "tool_use_id": "toolu_1",
+                })
+                self.assertEqual(params, {"session_id": "s1", "cwd": self.CWD, "event": "tool"})
+                for text in TOOL_TEXT:
+                    self.assertNotIn(text, json.dumps(params))
 
     def test_permission_notifications(self):
         self.assertTrue(hook_live.is_permission_prompt({"notification_type": "permission_prompt"}))
@@ -101,10 +78,6 @@ class ActionLines(unittest.TestCase):
         self.assertFalse(hook_live.is_permission_prompt({"message": "Claude is waiting for your input"}))
 
     def test_live_params(self):
-        self.assertEqual(hook_live.live_params({
-            "hook_event_name": "PreToolUse", "session_id": "s1", "cwd": self.CWD,
-            "tool_name": "Read", "tool_input": {"file_path": f"{self.CWD}/a"},
-        }), {"session_id": "s1", "cwd": self.CWD, "event": "tool", "action": "Reading a"})
         self.assertEqual(hook_live.live_params({
             "hook_event_name": "Notification", "session_id": "s1", "message": "needs your permission",
         })["event"], "permission")
@@ -130,11 +103,14 @@ class ActionLines(unittest.TestCase):
             def sendall(self, data):
                 frame = json.loads(data)
                 assert frame["method"] == "session_live"
+                assert frame["params"] == {"session_id": "s1", "cwd": None, "event": "tool"}, frame
+                for text in ("Bash", "ls -la", "command"):
+                    assert text not in data.decode(), text
             def recv(self, n):
                 return (json.dumps({"id": "x", "result": self.reply}) + "\n").encode()
 
         hook_input = {"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash",
-                      "tool_input": {"command": "ls"}}
+                      "tool_input": {"command": "ls -la"}}
         with mock.patch.object(hook_live, "_bridge_sockets", return_value=["/a", "/b", "/c"]), \
                 mock.patch.object(hook_live.socket, "socket", FakeSock), \
                 mock.patch.object(hook_live, "_read_hook_input", return_value=hook_input), \
@@ -169,56 +145,94 @@ class Board(unittest.TestCase):
         b.prompt("s1")
         rev, body = b.payload("s1")
         self.assertEqual(body, {"external_session_id": "s1", "running": True,
-                                "turn_started_at": "2026-11-10T10:00:01Z", "action": None,
-                                "recent": [], "waiting_permission": False})
-        for i in range(7):
-            b.tool("s1", f"Running step {i}")
-        _, body = b.payload("s1")
-        self.assertEqual(body["action"], "Running step 6")
-        self.assertEqual([r["text"] for r in body["recent"]],
-                         ["Running step 6", "Running step 5", "Running step 4", "Running step 3", "Running step 2"])
+                                "turn_started_at": "2026-11-10T10:00:01Z", "waiting_permission": False})
+        for _ in range(7):
+            b.tool("s1")
+        self.assertEqual(b.payload("s1"), (rev, body))       # working: nothing new to say
         b.permission("s1")
         self.assertTrue(b.payload("s1")[1]["waiting_permission"])
-        b.tool("s1", "Running step 7")
-        self.assertFalse(b.payload("s1")[1]["waiting_permission"])
+        b.tool("s1")                                         # the owner answered
+        _, body = b.payload("s1")
+        self.assertFalse(body["waiting_permission"])
+        self.assertEqual(body["turn_started_at"], "2026-11-10T10:00:01Z")  # the same turn's clock
         b.permission("s1")
         b.stop("s1")
         _, body = b.payload("s1")
-        self.assertEqual((body["running"], body["action"], body["turn_started_at"], body["waiting_permission"]),
-                         (False, None, None, False))
-        self.assertEqual(body["recent"][0]["text"], "Running step 7")  # what it did last stays
-        b.prompt("s1")
-        self.assertEqual(b.payload("s1")[1]["recent"], [])  # a new turn starts clean
+        self.assertEqual(body, {"external_session_id": "s1", "running": False,
+                                "turn_started_at": None, "waiting_permission": False})
 
-    def test_a_tool_call_without_a_prompt_starts_a_turn(self):
-        self.board.tool("s1", "Reading a")
+    def test_a_tool_start_without_a_prompt_starts_a_turn(self):
+        self.board.tool("s1")
         _, body = self.board.payload("s1")
         self.assertTrue(body["running"])
         self.assertIsNotNone(body["turn_started_at"])
+        self.assertEqual(self.board.dirty(), ["s1"])
+
+    def test_tool_takes_no_text(self):
+        with self.assertRaises(TypeError):
+            self.board.tool("s1", "Running pytest")
+
+    def test_payloads_never_carry_tool_activity(self):
+        b = self.board
+        for step in (lambda: b.prompt("s1"), lambda: b.tool("s1"), lambda: b.permission("s1"),
+                     lambda: b.tool("s1"), lambda: b.stop("s1"), lambda: b.tool("s2")):
+            step()
+            for sid in b.sessions:
+                _, body = b.payload(sid)
+                self.assertEqual(set(body), {"external_session_id", "running", "turn_started_at",
+                                             "waiting_permission"})
+                self.assertNotIn("action", body)
+                self.assertNotIn("recent", body)
+        for field in ("action", "recent"):
+            self.assertFalse(hasattr(b.sessions["s1"], field), field)
+
+    def test_repeated_tool_starts_are_not_a_change(self):
+        b = self.board
+        b.prompt("s1")
+        b.sent("s1", b.payload("s1")[0])
+        for _ in range(50):
+            b.tool("s1")
+            self.assertEqual(b.dirty(), [])
+        b.permission("s1")
+        b.sent("s1", b.payload("s1")[0])
+        b.tool("s1")                   # clears the wait: a change
+        self.assertEqual(b.dirty(), ["s1"])
+        b.sent("s1", b.payload("s1")[0])
+        b.tool("s1")
+        self.assertEqual(b.dirty(), [])
+        b.stop("s1")
+        b.sent("s1", b.payload("s1")[0])
+        b.tool("s1")                   # a turn the prompt hook missed starts: a change
+        self.assertEqual(b.dirty(), ["s1"])
+        b.sent("s1", b.payload("s1")[0])
+        b.tool("s1")
+        self.assertEqual(b.dirty(), [])
 
     def test_change_detection(self):
         b = self.board
         b.prompt("s1")
         rev, _ = b.payload("s1")
         self.assertEqual(b.dirty(), ["s1"])
-        b.tool("s1", "x")          # changed while the batch was on its way
+        b.permission("s1")         # changed while the batch was on its way
         b.sent("s1", rev)
         self.assertEqual(b.dirty(), ["s1"])
         b.sent("s1", b.payload("s1")[0])
         self.assertEqual(b.dirty(), [])
-        b.permission("s1")
-        b.sent("s1", b.payload("s1")[0])
         b.permission("s1")         # already waiting: no change
         b.stop("s1")
         b.sent("s1", b.payload("s1")[0])
         b.stop("s1")               # already stopped: no change
         self.assertEqual(b.dirty(), [])
 
-    def test_texts_are_clipped(self):
-        self.board.tool("s1", "y" * 300)
-        _, body = self.board.payload("s1")
-        self.assertEqual(len(body["action"]), 200)
-        self.assertEqual(len(body["recent"][0]["text"]), 200)
+    def test_tool_starts_keep_a_long_turn_from_being_forgotten(self):
+        b = self.board
+        b.prompt("s1")
+        b.sent("s1", b.payload("s1")[0])
+        self.t += sl.FORGET_S * 24 - 10
+        b.tool("s1")
+        self.t += 20
+        b.prune()
+        self.assertIn("s1", b.sessions)
 
     def test_heartbeat_and_forgetting(self):
         b = self.board
@@ -291,10 +305,12 @@ class Sender(unittest.TestCase):
 
     def test_one_batch_per_account_tracked_sessions_only(self):
         self.r.notify({"session_id": "s1", "event": "prompt"})
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "Running pytest"})
-        self.r.live_event({"session_id": "s2", "event": "tool", "action": "Reading a"})
+        # Anything else in the params (an older hook's action line) is ignored.
+        self.r.live_event({"session_id": "s1", "event": "tool", "action": "Running pytest",
+                           "tool_name": "Bash", "tool_input": {"command": "pytest"}})
+        self.r.live_event({"session_id": "s2", "event": "tool"})
         self.r.live_event({"session_id": "s3", "event": "permission"})
-        self.r.live_event({"session_id": "unknown", "event": "tool", "action": "x"})
+        self.r.live_event({"session_id": "unknown", "event": "tool"})
         self.assertEqual(self.flush(), 3)
         by_agent = {agent: body for agent, body in self.posts}
         self.assertEqual(len(self.posts), 2)                      # accounts a and b
@@ -304,38 +320,73 @@ class Sender(unittest.TestCase):
         self.assertEqual(body["host"], "macbook")
         s1 = next(s for s in body["sessions"] if s["external_session_id"] == "s1")
         self.assertEqual(s1, {"external_session_id": "s1", "running": True,
-                              "turn_started_at": "2026-11-10T10:00:00Z", "action": "Running pytest",
-                              "recent": [{"at": "2026-11-10T10:00:00Z", "text": "Running pytest"}],
-                              "waiting_permission": False})
+                              "turn_started_at": "2026-11-10T10:00:00Z", "waiting_permission": False})
+        sent = json.dumps([b for _, b in self.posts])
+        for text in ("action", "recent", "Running", "pytest", "Bash", "tool_name", "command"):
+            self.assertNotIn(text, sent)
+
+    def test_from_hook_to_post_nothing_about_the_tools(self):
+        self.r.notify({"session_id": "s1", "event": "prompt"})
+        for i, (tool, inp) in enumerate(TOOL_CALLS):
+            for hook_input in ({"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": "/w/app",
+                                "tool_name": tool, "tool_input": inp},
+                               {"hook_event_name": "Notification", "session_id": "s1", "cwd": "/w/app",
+                                "notification_type": "permission_prompt",
+                                "message": f"Claude needs your permission to use {tool}"}):
+                self.assertTrue(self.r.live_event(hook_live.live_params(hook_input)))
+                self.t += st.LIVE_INTERVAL_S
+                self.flush()
+        self.assertGreater(len(self.posts), len(TOOL_CALLS))
+        for _, body in self.posts:
+            for session in body["sessions"]:
+                self.assertEqual(set(session), {"external_session_id", "running", "turn_started_at",
+                                                "waiting_permission"})
+        sent = json.dumps([body for _, body in self.posts])
+        for text in TOOL_TEXT:
+            self.assertNotIn(text, sent)
 
     def test_only_changes_at_most_every_five_seconds_newest_state(self):
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "one"})
+        self.r.live_event({"session_id": "s1", "event": "tool"})
         self.flush()
         self.assertEqual(self.flush(), 0)                         # nothing changed
         self.t += 1
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "two"})
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "three"})
+        self.r.live_event({"session_id": "s1", "event": "permission"})
+        self.r.notify({"session_id": "s1", "event": "stop"})
         self.assertEqual(self.flush(), 0)                         # inside the 5 s window
         self.t += st.LIVE_INTERVAL_S
         self.assertEqual(self.flush(), 1)
         self.assertEqual(len(self.posts), 2)
-        self.assertEqual(self.posts[-1][1]["sessions"][0]["action"], "three")
-        self.assertEqual([r["text"] for r in self.posts[-1][1]["sessions"][0]["recent"]], ["three", "two", "one"])
+        self.assertEqual(self.posts[-1][1]["sessions"][0],
+                         {"external_session_id": "s1", "running": False, "turn_started_at": None,
+                          "waiting_permission": False})
+
+    def test_a_busy_session_is_not_sent_on_every_tool_call(self):
+        self.r.notify({"session_id": "s1", "event": "prompt"})
+        self.assertEqual(self.flush(), 1)
+        for _ in range(int(sl.HEARTBEAT_S // st.LIVE_INTERVAL_S) - 1):
+            self.t += st.LIVE_INTERVAL_S
+            for _ in range(5):
+                self.r.live_event({"session_id": "s1", "event": "tool"})
+            self.assertEqual(self.flush(), 0)
+        self.assertEqual(len(self.posts), 1)
+        self.t += st.LIVE_INTERVAL_S                              # the heartbeat
+        self.assertEqual(self.flush(), 1)
+        self.assertTrue(self.posts[-1][1]["sessions"][0]["running"])
 
     def test_429_waits_and_keeps_the_newest_state(self):
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "one"})
+        self.r.live_event({"session_id": "s1", "event": "tool"})
         self.responses = [(429, 30.0)]
         self.flush()
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "two"})
+        self.r.live_event({"session_id": "s1", "event": "permission"})
         self.t += 29
         self.assertEqual(self.flush(), 0)
         self.assertEqual(len(self.posts), 1)
         self.t += 1
         self.assertEqual(self.flush(), 1)
-        self.assertEqual(self.posts[-1][1]["sessions"][0]["action"], "two")
+        self.assertTrue(self.posts[-1][1]["sessions"][0]["waiting_permission"])
 
     def test_429_without_retry_after_waits_longer_each_time(self):
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "one"})
+        self.r.live_event({"session_id": "s1", "event": "tool"})
         self.responses = [(429, None), (429, None), (200, None)]
         self.flush()
         waits = []
@@ -349,7 +400,7 @@ class Sender(unittest.TestCase):
         self.assertEqual(self.r._live.dirty(), [])
 
     def test_a_failed_send_is_tried_again(self):
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "one"})
+        self.r.live_event({"session_id": "s1", "event": "tool"})
         self.responses = [(0, None)]
         self.flush()
         self.assertEqual(self.r._live.dirty(), ["s1"])
@@ -357,12 +408,12 @@ class Sender(unittest.TestCase):
         self.assertEqual(self.flush(), 1)
 
     def test_a_router_without_the_route_turns_live_off_not_facts(self):
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "one"})
+        self.r.live_event({"session_id": "s1", "event": "tool"})
         self.responses = [(404, None)]
         self.flush()
         self.assertTrue(self.r._live_off)
         self.t += 60
-        self.r.live_event({"session_id": "s1", "event": "tool", "action": "two"})
+        self.r.live_event({"session_id": "s1", "event": "permission"})
         self.assertEqual(self.flush(), 0)
         self.assertEqual(len(self.posts), 1)
         # The facts path is unchanged.
@@ -373,7 +424,7 @@ class Sender(unittest.TestCase):
         for i in range(120):
             sid = f"x{i}"
             self.r._state["sessions"][sid] = {"tracker_id": f"t{i}", "agent": "jenkins", "origin": "society_ai"}
-            self.r.live_event({"session_id": sid, "event": "tool", "action": "a"})
+            self.r.live_event({"session_id": sid, "event": "tool"})
         self.assertEqual(self.flush(), 120)
         self.assertEqual([len(b["sessions"]) for _, b in self.posts], [50, 50, 20])
 
@@ -384,14 +435,14 @@ class Sender(unittest.TestCase):
         st_["s2"]["reason"] = "stopped"
         self.r._configs["kilo"][1]["tracking"] = False
         for sid in ("s1", "s2", "s3"):
-            self.r.live_event({"session_id": sid, "event": "tool", "action": "a"})
+            self.r.live_event({"session_id": sid, "event": "tool"})
         self.assertEqual(self.flush(), 0)
         self.assertEqual(self.posts, [])
         self.r._configs["kilo"][1].update(tracking=True, claude_code_sessions=False)
         self.assertEqual(self.flush(), 0)
 
     def test_a_session_registered_later_is_sent_then(self):
-        self.r.live_event({"session_id": "s9", "event": "tool", "action": "a"})
+        self.r.live_event({"session_id": "s9", "event": "tool"})
         self.assertEqual(self.flush(), 0)
         self.r._state["sessions"]["s9"] = {"tracker_id": "t9", "agent": "jenkins", "origin": "society_ai"}
         self.assertEqual(self.flush(), 1)
@@ -405,7 +456,7 @@ class Sender(unittest.TestCase):
 
     def test_only_the_runner_takes_events(self):
         self.r._lock_fd = None
-        self.assertFalse(self.r.live_event({"session_id": "s1", "event": "tool", "action": "a"}))
+        self.assertFalse(self.r.live_event({"session_id": "s1", "event": "tool"}))
         self.assertEqual(self.r._live.sessions, {})
 
 

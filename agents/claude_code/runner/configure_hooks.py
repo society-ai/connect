@@ -8,7 +8,7 @@ Writes idempotent entries to ~/.claude/settings.json:
 - SessionStart     -> hook_session_start.py  (injects state snapshot)
 - Stop             -> hook_stop.py           (reminds about in_progress tasks)
 - UserPromptSubmit -> hook_user_prompt.py    (registers and mirrors at once)
-- PreToolUse       -> hook_live.py           (the current action, live view)
+- PreToolUse       -> hook_live.py           (a tool started, live view)
 - Notification     -> hook_live.py           (waiting for a permission, live view)
 - statusLine       -> hook_status_line.py    (📥 N · ✅ M · 🔔 K review)
 
@@ -211,9 +211,9 @@ def main() -> None:
     # at turn end. It blocks the turn from starting, so the hook itself only
     # fires one short-timeout IPC and returns; the bridge ships async.
     _upsert_event(hooks, "UserPromptSubmit", prompt_cmd, PROMPT_SCRIPT)
-    # The Sessions live view: the current action (PreToolUse blocks the tool,
-    # so the hook only hands one line to the local bridge) and a permission
-    # prompt (Notification).
+    # The Sessions live view: a tool started (PreToolUse blocks the tool, so
+    # the hook only tells the local bridge, with nothing about the tool) and a
+    # permission prompt (Notification).
     for event in LIVE_EVENTS:
         _upsert_event(hooks, event, live_cmd, LIVE_SCRIPT)
     _upsert_status_line(data, status_cmd)

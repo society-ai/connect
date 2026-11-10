@@ -607,7 +607,7 @@ class SessionManager:
         """Only the hooks the reply path needs: Stop (a turn ended: ship the
         transcript and hand the reply back), UserPromptSubmit (mirror the
         prompt early), and PreToolUse and Notification (the live view's
-        current action and permission prompts, session-trackers §19.3).
+        working signal and permission prompts, session-trackers §19.3).
         Mirror-only: the owner's task reminders and identity banner never
         reach a contact session."""
         py = _shq(sys.executable)
