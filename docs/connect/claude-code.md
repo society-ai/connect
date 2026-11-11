@@ -25,9 +25,20 @@ Run it from any folder. A machine with no agent yet gets one installed into
 same command finds that checkout wherever you run it (it reads the bridge
 LaunchAgent, or `~/.cache/society-ai/install-dir`) and updates it in place.
 So rotating a token or adding a persona later needs no `cd`, and never
-produces a second copy. The one case it refuses is a machine with two
-unrelated checkouts and nothing to tell them apart: it lists them and asks
-you to run the command from inside the one you meant.
+produces a second copy. The same folder reached by two spellings (`~/coding`
+and `~/Coding` on a Mac, or a symlink) counts once. The one case it refuses
+is a machine with two unrelated checkouts and nothing to tell them apart: it
+lists them and prints the command again with `--dir <folder>` added, ready to
+paste.
+
+To choose the folder yourself, add `--dir <folder>`: a folder that already
+holds the agent is used as is, and a folder that does not exist yet gets a new
+install. The folder used last is recorded in `~/.cache/society-ai/install-dir`,
+so this opens the control panel from anywhere:
+
+```bash
+cd "$(cat ~/.cache/society-ai/install-dir)" && ./connect status
+```
 
 Safe to re-run: an existing checkout is updated in place, then setup
 continues with its own re-run guards. Manual alternative:
