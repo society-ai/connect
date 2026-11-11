@@ -13,7 +13,11 @@ Where the id comes from:
     dispatched the work, else the chat the session's recording projects
     into) and answers `session_chat` over its IPC socket;
   - a session's MCP server asks with its SOCIETY_AI_SESSION_KEY;
-  - a one-shot spawn gets it directly as SOCIETY_AI_CHAT_ID.
+  - a one-shot spawn gets it directly as SOCIETY_AI_CHAT_ID;
+  - a session the owner started in Claude Code has neither: its MCP server
+    finds its session id from Claude Code's registry of the process it runs
+    under, and the chat that session is recorded into from the Tracker's
+    state. That is the chat an answer to what it asks comes back to.
 
 Calls the society-ai MCP server makes for a tool also send `X-Society-Tool`
 with the MCP tool name, so the router records them as that tool's calls.
@@ -24,7 +28,9 @@ does. Claude Code's local tools (Bash, Read, ...) never reach the router.
 from __future__ import annotations
 
 import contextvars
+import json
 import os
+import pathlib
 import re
 import time
 
@@ -78,13 +84,13 @@ async def request_headers() -> dict[str, str]:
 
 async def current_chat_id() -> str:
     """The Chat this process's session works in, or "" when there is none
-    (the owner's own desktop sessions, automation, no bridge)."""
+    (automation, no bridge, a session that is not recorded)."""
     direct = valid_chat_id(os.environ.get("SOCIETY_AI_CHAT_ID", ""))
     if direct:
         return direct
     key = os.environ.get("SOCIETY_AI_SESSION_KEY", "").strip()
     if not key:
-        return ""
+        return owner_session_chat()
     now = time.monotonic()
     hit = _cache.get(key)
     if hit is not None and now - hit[0] < _CACHE_TTL_S:
@@ -97,3 +103,26 @@ async def current_chat_id() -> str:
     if chat:
         _cache[key] = (now, chat)
     return chat
+
+
+# Claude Code's registry of running sessions (<pid>.json -> sessionId) and the
+# Tracker's state (session id -> the chat its recording projects into).
+CLAUDE_SESSIONS_DIR = pathlib.Path(os.path.expanduser("~")) / ".claude" / "sessions"
+TRACKER_STATE = pathlib.Path(os.path.expanduser("~")) / ".cache" / "society-ai" / "tracker" / "state.json"
+
+
+def owner_session_chat(pid: int | None = None) -> str:
+    """The chat of the session the owner started in Claude Code that this MCP
+    server runs under (its parent process), or "" when it is not one."""
+    try:
+        reg = json.loads((CLAUDE_SESSIONS_DIR / f"{pid or os.getppid()}.json").read_text())
+        session_id = reg.get("sessionId") if isinstance(reg, dict) else None
+        if not session_id:
+            return ""
+        state = json.loads(TRACKER_STATE.read_text())
+        row = (state.get("sessions") or {}).get(session_id) or {}
+    except (OSError, ValueError, AttributeError):
+        return ""
+    if row.get("origin") != "direct":
+        return ""
+    return valid_chat_id(row.get("chat_id"))

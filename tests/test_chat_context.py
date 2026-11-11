@@ -47,8 +47,12 @@ class CurrentChat(unittest.TestCase):
         self._env.start()
         os.environ.pop("SOCIETY_AI_CHAT_ID", None)
         os.environ.pop("SOCIETY_AI_SESSION_KEY", None)
+        # Not a session the owner started either (test_inbox_answers.py).
+        self._no_owner = mock.patch.object(chat_context, "owner_session_chat", return_value="")
+        self._no_owner.start()
 
     def tearDown(self):
+        self._no_owner.stop()
         self._env.stop()
 
     def test_no_session_means_no_chat_and_no_ipc(self):

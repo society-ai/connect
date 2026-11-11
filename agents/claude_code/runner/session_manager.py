@@ -281,7 +281,12 @@ class SessionManager:
         `permission` is None for the owner and the contact level otherwise.
         A live session launched at a different level (the owner changed the
         contact's permissions) is restarted with --resume, so the
-        conversation keeps its history under the new limits."""
+        conversation keeps its history under the new limits.
+
+        `background` False on a session that ran headless (automation) gives
+        it a Remote Control entry from now on: the owner now follows it. A
+        live one turns it on in place (/remote-control); a closed one gets it
+        when it resumes."""
         work_item_key = self.resolve(work_item_key)
         lock = self._launch_locks.setdefault(work_item_key, asyncio.Lock())
         async with lock:
@@ -291,6 +296,8 @@ class SessionManager:
                     rec.last_active = time.time()
                     rec.fresh_launch = False
                     self.set_chat(work_item_key, chat_id)
+                    if rec.background and not background:
+                        await self._enable_remote_control(rec)
                     return rec
                 logger.info("Permissions for %s changed (%s -> %s); relaunching",
                             work_item_key[:40], rec.permission, permission)
@@ -311,6 +318,8 @@ class SessionManager:
                 self._sessions[work_item_key] = rec
             else:
                 rec.title = title or rec.title
+                if not background:
+                    rec.background = False
             rec.permission = permission
             rec.contact_label = contact_label
             if not rec.cwd:
@@ -846,10 +855,10 @@ class SessionManager:
             return None
         return out.decode("utf-8", "replace")
 
-    async def _tmux_send(self, name: str, keys: str, *, enter: bool = False) -> None:
+    async def _tmux_send(self, name: str, keys: str, *, enter: bool = False, literal: bool = False) -> None:
         if keys:
             proc = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", name, keys,
+                "tmux", "send-keys", "-t", name, *(["-l"] if literal else []), keys,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             )
             await proc.wait()
@@ -860,6 +869,19 @@ class SessionManager:
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             )
             await proc.wait()
+
+    async def _enable_remote_control(self, rec: SessionRecord) -> None:
+        """Give a live headless session its Remote Control entry without a
+        restart. Claude Code runs /remote-control at once, even mid-turn,
+        without interrupting the turn or asking anything."""
+        rec.background = False
+        self._save_registry()
+        if not self.policy(rec.persona).remote_control:
+            return
+        name = " ".join(rec.title.split())[:60]
+        await self._tmux_send(rec.tmux_name, f"/remote-control {name}".strip(), literal=True)
+        await self._tmux_send(rec.tmux_name, "", enter=True)
+        logger.info("Remote Control turned on for %s", rec.work_item_key[:40])
 
     async def tmux_type(self, work_item_key: str, text: str) -> bool:
         """Type a literal message into a session's input + submit. Used for

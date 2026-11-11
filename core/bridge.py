@@ -1144,9 +1144,16 @@ class Bridge:
                         # v0.7: dispatch into a persistent per-work-item session.
                         # Stable key gives task rework continuity (resume same
                         # session); chat falls back to sessionId/chat/task_id.
+                        # The chat an answer to the agent's own inbox item or
+                        # held action goes back to: the chat it asked from.
+                        inbox_chat = inbox_answer_chat(sender, frame, metadata)
                         if sender.session:
                             # One long-lived session (Society AI updates for the Lead).
                             work_item_key = sender.session
+                        elif inbox_chat and self._session_mgr is not None and self._session_mgr.get(inbox_chat):
+                            # The session that asked (a task session has its chat
+                            # aliased to it), not a new one per answer.
+                            work_item_key = inbox_chat
                         elif sender.is_owner:
                             work_item_key = (
                                 agent_task_id
@@ -1246,6 +1253,7 @@ class Bridge:
                             sender=sender, permission=permission,
                             delivery_chat_id=delivery_chat_id,
                             attachments=attachments,
+                            inbox_chat=inbox_chat,
                         )
                     elif not sender.is_owner:
                         # The one-shot spawn path (session mode off, or the
@@ -2690,6 +2698,7 @@ class Bridge:
         permission: str | None = None,
         delivery_chat_id: str | None = None,
         attachments: list[Attachment] | None = None,
+        inbox_chat: str = "",
     ) -> None:
         """Dispatch a work item into a persistent session and wait for its
         reply, then complete the A2A task. The event_id we send IS the A2A
@@ -2697,12 +2706,15 @@ class Bridge:
 
         `permission` is None for the owner; for a contact it is the level
         the session is launched (or relaunched) with. `delivery_chat_id`
-        names the owner's chat whose message gets delivery ticks."""
+        names the owner's chat whose message gets delivery ticks.
+        `inbox_chat` is set for the owner's answer to something the agent
+        asked: the chat it asked from (inbox_answer_chat)."""
         # A session the owner started in Claude Code itself: its chat page
-        # sends here, but it has no channel. The relay carries the message.
-        if kind == "chat" and (sender is None or sender.is_owner):
+        # sends here, but it has no channel. The relay carries the message,
+        # and an answer to what such a session asked goes back the same way.
+        if (kind == "chat" or inbox_chat) and (sender is None or sender.is_owner):
             from agents.claude_code.runner.direct_reply import direct_session_for_chat
-            direct = direct_session_for_chat(delivery_chat_id or work_item_key)
+            direct = direct_session_for_chat(inbox_chat or delivery_chat_id or work_item_key)
             if direct is not None:
                 await self._reply_into_direct_session(
                     task_id, direct, content, delivery_chat_id, timeout_s, bool(attachments),
@@ -2742,12 +2754,16 @@ class Bridge:
                 chat_id=delivery_chat_id or (existing.chat_id if existing is not None else ""),
             ))
         # Ensure (launch or resume) the work item's session. Trigger-kind
-        # work (wakes, schedules, status echoes) runs headless — no Remote
-        # Control sidebar row.
+        # work (wakes, schedules, status echoes) runs headless, with no Remote
+        # Control sidebar row, except the owner's answer to something the
+        # session asked: the owner follows that session, so it shows in
+        # Claude Code like their chats do.
         try:
             rec = await mgr.ensure_session(
-                work_item_key, self.ctx.name, title=title,
-                background=(kind == "trigger"),
+                work_item_key, self.ctx.name,
+                # An answer continues the session that asked, under its own name.
+                title=(existing.title if inbox_chat and existing is not None else title),
+                background=(kind == "trigger" and not inbox_chat),
                 permission=permission,
                 contact_label=sender.label if sender is not None and not sender.is_owner else "",
                 sender_group=sender.group if sender is not None and not sender.is_owner else "",
@@ -3106,6 +3122,25 @@ def _owner_chat_id(metadata: dict) -> str | None:
         if isinstance(chat_id, str) and chat_id.strip():
             return chat_id.strip()
     return None
+
+
+# Inbox causes that answer something the agent asked its owner: its inbox item,
+# or an action it was told to ask about first.
+INBOX_ANSWER_REASONS = ("inbox_responded", "held_action")
+
+
+def inbox_answer_chat(sender: Sender, frame: dict | None, metadata: dict) -> str:
+    """The chat the owner's answer to this agent's inbox item (or held action)
+    returns to: the chat the agent asked from, which the router names as the
+    dispatch's chat_id. "" for anything else. Only metadata.chat_id counts:
+    every dispatch carries a sessionId, a fresh one when there is no chat."""
+    if frame is None or not sender.is_owner or sender.session:
+        return ""
+    if str(frame.get("cause") or "") != "inbox":
+        return ""
+    if metadata.get("trigger_reason") not in INBOX_ANSWER_REASONS:
+        return ""
+    return valid_chat_id(metadata.get("chat_id"))
 
 
 # -- Env files ----------------------------------------------------------------
