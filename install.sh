@@ -12,6 +12,7 @@
 # no install at all clones, into ./society-ai-connect.
 #
 # Where it looks, in order:
+#   0. --dir <folder>, when given: that checkout, or a new install there.
 #   1. The current folder, if it is itself a checkout.
 #   2. ./society-ai-connect, if it is a checkout.
 #   3. The folder recorded at ~/.cache/society-ai/install-dir.
@@ -19,10 +20,12 @@
 # Among 3 and 4, a checkout that already knows the --name being set up wins;
 # failing that, a single known checkout is used. Two or more unrelated
 # checkouts is the one case that stops and asks, because picking for the
-# user could point a live agent's service at the wrong code.
+# user could point a live agent's service at the wrong code. The same folder
+# reached by two spellings (coding vs Coding on a case-insensitive Mac disk,
+# or through a symlink) counts once.
 #
 # Everything past this file's own resolution is setup.sh's job: it receives
-# every argument untouched and guards all of its own re-run cases.
+# every argument except --dir untouched and guards all of its own re-run cases.
 set -u
 
 REPO_URL="https://github.com/society-ai/connect.git"
@@ -42,22 +45,49 @@ if ! command -v git >/dev/null 2>&1; then
     exit 1
 fi
 
-# ── Peek at the agent name ─────────────────────────────────────────────────
-# Read-only pass over the arguments, used solely to pick between several
-# existing checkouts. setup.sh parses all of them properly afterwards.
+# ── Read the arguments ─────────────────────────────────────────────────────
+# Takes out --dir, which is this file's alone, and peeks at the agent name to
+# pick between several existing checkouts. Everything else goes on to
+# setup.sh, which parses it properly. Values of setup.sh's flags are skipped
+# as values, so a value can never be mistaken for --dir.
 AGENT_NAME=""
-expect_value=0
+INSTALL_DIR=""
+DIR_GIVEN=0
+SETUP_ARGS=()
+expect_value=""
 for arg in "$@"; do
-    if [ "$expect_value" = 1 ]; then
-        AGENT_NAME="$arg"
-        expect_value=0
+    if [ -n "$expect_value" ]; then
+        case "$expect_value" in
+            dir)  INSTALL_DIR="$arg" ;;
+            name) AGENT_NAME="$arg"; SETUP_ARGS+=("$arg") ;;
+            *)    SETUP_ARGS+=("$arg") ;;
+        esac
+        expect_value=""
         continue
     fi
     case "$arg" in
-        --name|--persona)     expect_value=1 ;;
-        --name=*|--persona=*) AGENT_NAME="${arg#*=}" ;;
+        --dir)                expect_value=dir; DIR_GIVEN=1 ;;
+        --dir=*)              INSTALL_DIR="${arg#*=}"; DIR_GIVEN=1 ;;
+        --name|--persona)     expect_value=name; SETUP_ARGS+=("$arg") ;;
+        --name=*|--persona=*) AGENT_NAME="${arg#*=}"; SETUP_ARGS+=("$arg") ;;
+        --token|--display-name|--url|--type|--command)
+                              expect_value=other; SETUP_ARGS+=("$arg") ;;
+        *)                    SETUP_ARGS+=("$arg") ;;
     esac
 done
+if [ "$expect_value" = dir ] || { [ "$DIR_GIVEN" = 1 ] && [ -z "$INSTALL_DIR" ]; }; then
+    echo ""
+    echo "  --dir needs a folder after it, for example:"
+    echo ""
+    echo "      --dir ~/society-ai-connect"
+    echo ""
+    exit 1
+fi
+# A ~ inside --dir=~/x is not expanded by the shell; do it here.
+case "$INSTALL_DIR" in
+    "~")   INSTALL_DIR="$HOME" ;;
+    "~/"*) INSTALL_DIR="$HOME/${INSTALL_DIR#"~/"}" ;;
+esac
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -102,15 +132,35 @@ with open(sys.argv[1], "rb") as f:
 
 CANDIDATES=""
 add_candidate() {
-    local dir resolved
+    local dir resolved known
     dir="${1:-}"
     [ -n "$dir" ] || return 0
     resolved="$(abs_path "$dir")" || return 0
     [ -n "$resolved" ] || return 0
     is_checkout "$resolved" || return 0
-    printf '%s\n' "$CANDIDATES" | grep -qxF "$resolved" && return 0
+    # Same folder, not same spelling: a Mac disk ignores letter case, so
+    # ~/coding/x and ~/Coding/x are one folder, and a symlink is another way
+    # to reach the same one. -ef compares the folders themselves.
+    while IFS= read -r known; do
+        [ -n "$known" ] || continue
+        [ "$resolved" -ef "$known" ] && return 0
+    done <<EOF
+$CANDIDATES
+EOF
     CANDIDATES="${CANDIDATES}${resolved}
 "
+}
+
+# The command the user ran, rebuilt with --dir <folder> so they can paste it
+# back as is. Every argument is shell-quoted; the token is in it, as it was in
+# the command they pasted.
+retry_command() {
+    local cmd arg
+    cmd="curl -fsSL https://raw.githubusercontent.com/society-ai/connect/main/install.sh | bash -s --"
+    for arg in ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}; do
+        cmd="$cmd $(printf '%q' "$arg")"
+    done
+    printf '%s --dir %s' "$cmd" "$(printf '%q' "$1")"
 }
 
 remember_install_dir() {
@@ -121,7 +171,25 @@ remember_install_dir() {
 # ── Resolve which checkout to use ──────────────────────────────────────────
 TARGET=""
 
-if is_checkout "$PWD"; then
+if [ -n "$INSTALL_DIR" ]; then
+    # Named on the command line: use it if it holds the agent, otherwise
+    # install a new copy there (below). Discovery is skipped either way.
+    if is_checkout "$INSTALL_DIR"; then
+        TARGET="$(abs_path "$INSTALL_DIR")"
+    elif [ -e "$INSTALL_DIR" ]; then
+        echo ""
+        echo "  $INSTALL_DIR is not a folder the agent is installed in."
+        echo ""
+        echo "  After --dir, give either a folder that holds the agent, or a"
+        echo "  new folder name to install it into, for example:"
+        echo ""
+        echo "      --dir ~/society-ai-connect"
+        echo ""
+        exit 1
+    else
+        DIR="$INSTALL_DIR"
+    fi
+elif is_checkout "$PWD"; then
     # Standing inside a checkout is an explicit choice: honour it, and never
     # let discovery second-guess it.
     TARGET="$PWD"
@@ -160,10 +228,12 @@ EOF
         echo ""
         printf '%s' "$CANDIDATES" | sed 's/^/      /'
         echo ""
-        echo "  Open the folder you want to update, then run the same command"
-        echo "  again from inside it. For example:"
+        echo "  Choose one by running the command again with --dir and that"
+        echo "  folder. To use the first one, paste this:"
         echo ""
-        echo "      cd $FIRST"
+        echo "      $(retry_command "$FIRST")"
+        echo ""
+        echo "  For another one, change the folder after --dir."
         echo ""
         exit 1
     elif [ "$TOTAL_COUNT" = 1 ]; then
@@ -214,4 +284,4 @@ fi
 remember_install_dir "$TARGET"
 
 cd "$TARGET" || exit 1
-exec ./connect setup "$@"
+exec ./connect setup ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
