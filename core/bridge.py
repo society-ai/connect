@@ -75,6 +75,7 @@ from core.contacts import (
 )
 from dataclasses import replace
 from core import folders
+from core import removal
 from core.attachments import FILES_DIRNAME, Attachment, fetch_all, parse_file_parts, prompt_block
 from core.chat_context import chat_headers, valid_chat_id
 from typing import Any, Optional
@@ -252,6 +253,8 @@ async def exchange_api_key_for_jwt(api_key: str, api_url: str = AGENT_ROUTER_API
     async with httpx.AsyncClient(timeout=JWT_EXCHANGE_TIMEOUT, verify=ssl_ctx) as client:
         resp = await client.post(url, json={"api_key": api_key})
 
+    if resp.status_code == 401 and resp.headers.get(AGENT_STATUS_HEADER, "").lower() == "deleted":
+        raise AgentDeletedError("Society AI refused this agent's key: the agent was deleted there.")
     if resp.status_code in (401, 403):
         raise AuthError(
             f"Auth failed exchanging API key (HTTP {resp.status_code}). "
@@ -276,6 +279,15 @@ async def exchange_api_key_for_jwt(api_key: str, api_url: str = AGENT_ROUTER_API
 
 class AuthError(Exception):
     """Raised when API key authentication fails. Not retryable."""
+
+
+class AgentDeletedError(AuthError):
+    """The key was refused because its agent was deleted on Society AI."""
+
+
+# Set to "deleted" by the router on a refused key whose agent was deleted
+# (agent_router/auth/routes.py AGENT_STATUS_HEADER).
+AGENT_STATUS_HEADER = "X-Society-Agent-Status"
 
 
 # -- HTTP client for fetching task details ------------------------------------
@@ -1031,8 +1043,38 @@ class Bridge:
         elif method == "agent.update":
             await self.handle_agent_update(msg_id, params)
 
+        elif method == "agent.removed":
+            self.handle_agent_removed(params)
+
         else:
             logger.debug("Unhandled method: %s", method)
+
+    # -- Agent deleted on Society AI -----------------------------------------
+
+    def handle_agent_removed(self, params: dict) -> None:
+        """The hub says this agent was deleted (agent.removed), then closes the link."""
+        name = (params or {}).get("agent_name")
+        if name and name != self.ctx.name:
+            logger.warning("Ignoring agent.removed for %s: this bridge is %s", name, self.ctx.name)
+            return
+        self.remove_self("Society AI says the agent was deleted")
+
+    def remove_self(self, why: str) -> None:
+        """Remove this agent from the computer (service, key, logs), keep its
+        folder and sessions, and stop. Removes nothing unless the persona's key
+        file names this agent, so a bridge started by hand never removes another."""
+        logger.warning("%s: removing %s from this computer; its folder and sessions stay", why, self.ctx.name)
+        try:
+            result = removal.remove_persona(
+                os.getenv("SOCIETY_AI_PERSONA", ""),
+                reason=removal.DELETED_ON_SOCIETY_AI,
+                from_bridge=True,
+                expected_agent=self.ctx.name,
+            )
+            logger.info("Removed %s; kept %s", ", ".join(result["removed"]) or "nothing", ", ".join(result["kept"]) or "nothing")
+        except Exception as e:  # noqa: BLE001 - stopping matters more than the cleanup
+            logger.error("Could not remove %s from this computer: %s", self.ctx.name, e)
+        self.stop()
 
     # -- Task execution ------------------------------------------------------
 
@@ -3024,6 +3066,10 @@ class Bridge:
             # Get fresh JWT before each connection attempt
             try:
                 await self.obtain_jwt()
+            except AgentDeletedError as e:
+                # Deleted while this computer was off or offline.
+                self.remove_self(str(e))
+                return
             except AuthError as e:
                 # Bad credentials — do not retry endlessly; exit so the user sees it.
                 logger.error("%s", e)

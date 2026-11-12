@@ -7,6 +7,7 @@ Your agents on this computer:
     ./connect status [--no-open]       the local status and control panel
     ./connect service <command> [<persona>]   start, stop, restart, logs, status, install, uninstall
     ./connect update [<persona>]       update to the latest release
+    ./connect remove <persona>         remove an agent from this computer (its folder stays)
     ./connect sandbox-setup            one-time setup for secured mode (OpenShell)
 
 For contributors:
@@ -117,6 +118,10 @@ def registry_build(args) -> int:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] in SCRIPTS:
         return run_script(sys.argv[1], sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "remove":
+        from core import removal
+
+        return removal.main(sys.argv[2:])
     parser = argparse.ArgumentParser(prog="connect", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="group", required=True)
     dev = sub.add_parser("dev").add_subparsers(dest="command", required=True)

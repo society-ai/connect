@@ -29,6 +29,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from core import removal
+
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the repo root (this is core/)
 BASE_LABEL = "io.societyai.claude-code-bridge"
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "society-ai")
@@ -323,9 +325,15 @@ def build_status() -> dict:
             "label": p["label"], "installed": p["installed"], "running": running,
             "live": live if running else None, "config": cfg,
         })
+    # An agent set up again since it was removed is no longer "removed".
+    present = {a["id"] for a in agents}
+    removed = [
+        {**e, "page_url": removal.agent_page_url(e.get("agent_name", ""))}
+        for e in removal.read_tombstones() if e.get("id") not in present
+    ]
     return {
         "agent_schema": AGENT_SCHEMA, "machine_schema": MACHINE_SCHEMA,
-        "agents": agents, "machine": machine_config(), "repo": REPO_DIR,
+        "agents": agents, "removed": removed, "machine": machine_config(), "repo": REPO_DIR,
     }
 
 
@@ -450,7 +458,11 @@ class Handler(BaseHTTPRequestHandler):
                     strip_env_keys(os.path.join(REPO_DIR, p["env_file"]), set(clean.keys()))
             return self._json(200, {"ok": True, "written": sorted(clean), "restart_required": bool(clean)})
 
-        m = re.fullmatch(r"/api/persona/([a-z0-9._-]+)/(config|start|stop|restart|reap|reopen)", parsed.path)
+        m = re.fullmatch(r"/api/removed/([a-z0-9._-]+)/dismiss", parsed.path)
+        if m:
+            return self._json(200, {"ok": removal.dismiss_tombstone(m.group(1))})
+
+        m = re.fullmatch(r"/api/persona/([a-z0-9._-]+)/(config|start|stop|restart|reap|reopen|remove)", parsed.path)
         if not m:
             return self._json(404, {"error": "not found"})
         persona_id, action = m.group(1), m.group(2)
@@ -466,6 +478,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True, "written": sorted(clean), "restart_required": bool(clean)})
         if action in ("start", "stop", "restart"):
             return self._json(200, run_service(action, p["persona_arg"]))
+        if action == "remove":
+            try:
+                result = removal.remove_persona(p["persona_arg"], reason=removal.REMOVED_HERE)
+            except removal.RemovalError as e:
+                return self._json(400, {"ok": False, "message": str(e)})
+            return self._json(200, {"ok": True, **result, "page_url": removal.agent_page_url(result["agent_name"])})
         if action == "reap":
             return self._json(200, ipc_call(p["socket"], "reap_session", {"work_item_key": str(body.get("work_item_key") or "")}))
         if action == "reopen":
@@ -545,6 +563,10 @@ body.drawer-open{overflow:hidden}
 .hint{font-size:11.5px;color:var(--mut);margin:5px 0 2px}
 .warn{color:var(--warn)}
 .err{color:var(--err);font-size:12px;margin-top:5px}
+.btn.danger{color:var(--err)}
+.btn.danger:hover{border-color:var(--err)}
+.notice{display:flex;gap:12px;align-items:center;justify-content:space-between;background:var(--warn-bg);border:1px solid var(--bd);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:13.5px}
+.notice a{color:var(--acc)}
 .adv summary{cursor:pointer;color:var(--mut);font-size:12.5px;margin-top:14px;list-style:none}
 .adv summary::-webkit-details-marker{display:none}
 .adv summary:before{content:"▸ ";font-size:10px}
@@ -604,6 +626,15 @@ async function load(){try{DATA=await api('/api/status?t='+TOKEN);render();}catch
 function render(){
  document.getElementById('sub').textContent=DATA.repo;
  const root=document.getElementById('root');root.innerHTML='';
+ (DATA.removed||[]).forEach(r=>{
+  const n=document.createElement('div');n.className='notice';
+  const kept=(r.kept||[]).length?` Its folder is still at <b>${esc(r.kept[0])}</b>.`:'';
+  n.innerHTML=r.reason==='deleted_on_society_ai'
+   ?`<div><b>${esc(r.agent_name)}</b> was deleted on Society AI, so it was removed from this computer.${kept}</div>`
+   :`<div><b>${esc(r.agent_name)}</b> was removed from this computer.${kept} It still exists on Society AI: <a href="${esc(r.page_url)}" target="_blank" rel="noopener">delete it there</a>.</div>`;
+  n.innerHTML+=`<button class="btn sm" onclick="dismissRemoved('${esc(r.id)}')">Dismiss</button>`;
+  root.appendChild(n);
+ });
  DATA.agents.forEach(a=>{
   const live=a.live||{}, sess=live.sessions||[];
   const open_=sess.filter(s=>s.state==='ready'||s.state==='starting'), closed=sess.filter(s=>!(s.state==='ready'||s.state==='starting')).slice(0,20);
@@ -632,6 +663,9 @@ function render(){
      ${open_.length?`<details class="adv" style="margin-top:6px"><summary>${open_.length} open session${open_.length>1?'s':''}</summary><div class="sess">${open_.map(s=>`<div class="row"><div class="t">${esc(s.title||s.work_item_key)}<div class="k">${sessMeta(s)} · idle ${ago(s.idle_seconds)}</div></div><button class="btn sm" onclick="reap('${a.id}','${esc(s.work_item_key)}')">End</button></div>`).join('')}</div></details>`:''}
      ${closed.length?`<details class="adv" style="margin-top:6px"><summary>${closed.length} recent closed session${closed.length>1?'s':''}</summary><div class="sess">${closed.map(s=>`<div class="row"><div class="t">${esc(s.title||s.work_item_key)}<div class="k">${sessMeta(s)} · last active ${ago(s.idle_seconds)} ago</div></div><button class="btn sm" onclick="reopen('${a.id}','${esc(s.work_item_key)}',this)">Reopen</button></div>`).join('')}</div></details>`:''}
      <details class="adv"><summary>Advanced (identity)</summary><div data-adv>${advFields(a)}</div></details>
+     <details class="adv"><summary>Remove from this computer</summary>
+       <div class="hint">Stops this agent here and removes its key and logs. Its folders and sessions stay. It still exists on Society AI until you delete it there.</div>
+       <div class="savebar"><button class="btn sm danger" onclick="removeAgent('${a.id}','${esc(a.display)}')">Remove ${esc(a.display)}</button></div></details>
    </div>`;
   root.appendChild(card);
  });
@@ -655,6 +689,8 @@ async function saveDirs(id){const c=card(id);c.querySelector('[data-err]').textC
 async function saveAdv(id){const c=card(id);const u={};c.querySelectorAll('[data-adv] [data-k]').forEach(el=>{if(el.type==='password'){if(el.value)u[el.dataset.k]=el.value;}else u[el.dataset.k]=el.value;});try{const r=await api('/api/persona/'+id+'/config',{updates:u});toast(r.written.length?'Saved — restart to apply':'No changes');}catch(e){toast('Save failed',true);}}
 
 async function toggleAgent(id,on){try{const r=await api('/api/persona/'+id+'/'+(on?'start':'stop'),{});toast(on?'Connecting…':'Disconnecting…',!r.ok);setTimeout(load,1400);}catch(e){toast('Failed',true);load();}}
+async function removeAgent(id,name){if(!confirm('Remove '+name+' from this computer? Its folders and sessions stay.'))return;try{const r=await api('/api/persona/'+id+'/remove',{});toast(r.ok?name+' removed':(r.message||'Remove failed'),!r.ok);}catch(e){toast((e&&e.message)||'Remove failed',true);}setTimeout(load,800);}
+async function dismissRemoved(id){try{await api('/api/removed/'+id+'/dismiss',{});}catch(e){}load();}
 async function act(id,verb){try{const r=await api('/api/persona/'+id+'/'+verb,{});toast(verb+(r.ok?' ok':' failed'),!r.ok);setTimeout(load,1400);}catch(e){toast(verb+' failed',true);}}
 function ago(sec){if(sec<90)return sec+'s';if(sec<5400)return Math.round(sec/60)+'m';if(sec<172800)return Math.round(sec/3600)+'h';return Math.round(sec/86400)+'d';}
 function sessMeta(s){return s.contact?('from '+esc(s.contact)+' · '+esc(s.permission||'chat')):(s.kind==='background'?'automation':'yours');}

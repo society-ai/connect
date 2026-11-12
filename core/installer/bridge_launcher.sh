@@ -43,6 +43,10 @@ set -a
 source "$ENV_FILE"
 set +a
 
+# Which persona this bridge is ("" = the default .env), so it can remove
+# itself when its agent is deleted on Society AI (core/removal.py).
+export SOCIETY_AI_PERSONA="$PERSONA"
+
 # Per-persona IPC socket so two bridges never collide. The env file
 # normally sets this explicitly; this is a safety net for hand-rolled
 # persona env files that forgot it.

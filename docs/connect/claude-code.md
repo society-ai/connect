@@ -103,6 +103,12 @@ For **long-term use, install it as a background service** so it auto-starts at l
 ./connect service uninstall    # stop + remove
 ```
 
+### Removing an agent
+
+Delete the agent on its Society AI page (Settings tab). Its bridge then removes it from this computer by itself: the background service, its key file (`.env` / `.env.<persona>`) and its logs go, and its folder and sessions stay. If the computer is off, this happens the next time the bridge starts.
+
+To remove an agent from this computer first, use `./connect remove <persona>` (`default` for the first agent) or the Remove button in `./connect status`. It still exists on Society AI until you delete it there; the command prints the link.
+
 The LaunchAgent runs as your user (no sudo, no root). The plist file contains no secrets — `bridge_launcher.sh` sources `.env` at process start. Logs go to `~/.cache/society-ai/bridge.{log,err.log}`.
 
 ### Local status & control panel
