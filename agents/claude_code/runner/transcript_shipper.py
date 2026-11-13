@@ -162,6 +162,27 @@ def chat_echo(text: str) -> str:
     return f'<channel source="society-ai" kind="chat" via="app">\n{text}\n</channel>'
 
 
+# Turns Claude Code writes as "user" that nobody typed (the session's own machinery): background
+# task and Monitor notices (origin.kind "task-notification"), slash command echoes and output, `!`
+# shell input and output, CI monitor events, scheduled task prompts. They stay on the machine: in
+# the chat they read as messages from the owner.
+_MACHINE_ORIGINS = frozenset({"task-notification"})
+_MACHINE_TURN_RE = re.compile(
+    r"^\s*<(task-notification|local-command-stdout|local-command-stderr|local-command-caveat|command-name"
+    r"|command-message|command-args|bash-input|bash-stdout|bash-stderr|ci-monitor-event|scheduled-task)\b"
+)
+# Context the app or Claude Code puts around what the owner typed: never the owner's words.
+_CONTEXT_BLOCK_RE = re.compile(
+    r"<(system-reminder|artifact-view-context)\b[^>]*>.*?</\1>|<artifact-content-authored-by-others\s*/>", re.S
+)
+
+
+def _machine_turn(record: dict, text: str) -> bool:
+    """A user record the session's machinery wrote, not the owner."""
+    origin = record.get("origin") if isinstance(record.get("origin"), dict) else {}
+    return origin.get("kind") in _MACHINE_ORIGINS or bool(_MACHINE_TURN_RE.match(text))
+
+
 def _shippable_entries(record: dict, skills: Optional[dict] = None) -> list[dict]:
     """Project one raw transcript record into zero or more shippable
     entries. Deterministic — same record always
@@ -209,6 +230,12 @@ def _shippable_entries(record: dict, skills: Optional[dict] = None) -> list[dict
                 # Command caveats, reminders and the like stay on the machine. Society AI's
                 # relay (peer "Society AI") and channel events go on below: they carry the
                 # owner's messages from the app, which ship as chat echoes.
+                return []
+        else:
+            if _machine_turn(record, text):
+                return []
+            text = _CONTEXT_BLOCK_RE.sub("", text).strip()
+            if not text:
                 return []
         relayed = _RELAY_RE.search(text)
         if relayed:

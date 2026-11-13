@@ -218,6 +218,23 @@ class Shipping(unittest.TestCase):
         self.assertTrue(texts[0].startswith('<channel ') and 'kind="chat"' in texts[0])
         self.assertEqual(texts[1], "typed here")
 
+    def test_turns_the_session_machinery_wrote_stay_on_the_machine(self):
+        notice = ('<task-notification>\n<task-id>bpozm8ozh</task-id>\n<summary>Monitor event: "replay"</summary>\n'
+                  '<event>progress 200/2277</event>\n</task-notification>')
+        texts = self.entries([
+            _record(notice, origin={"kind": "task-notification", "producer": "session-task"}),
+            _record(notice),  # older Claude Code: no origin, the tag says it
+            _record("<command-name>/clear</command-name>\n<command-message>clear</command-message>"),
+            _record("<local-command-stdout>Cleared</local-command-stdout>"),
+            _record("<bash-input>git status</bash-input>"),
+            _record('<ci-monitor-event pr="7">checks passed</ci-monitor-event>'),
+            _record('<scheduled-task name="morning">Run the brief</scheduled-task>'),
+            _record("<system-reminder>Context only</system-reminder>"),
+            _record("<artifact-view-context artifact=\"a1\">\n{}\n</artifact-view-context>\n\nship it"),
+            _record("typed here", origin={"kind": "human"}),
+        ])
+        self.assertEqual(texts, ["ship it", "typed here"])
+
     def test_a_resumed_turn_from_the_app_ships_as_a_chat_echo_once(self):
         self.shipper.expect_app_turn("s1", "What is left?")
         texts = self.entries([_record("What is left?"), _record("What is left?")])
