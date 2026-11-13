@@ -173,6 +173,53 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(state["chat_url"], "https://app/chat/c1")
         self.assertEqual(state["cursor"], self.transcript.stat().st_size)
 
+    def bind(self, agent):
+        """The running session (this process stands in for Claude Code) bound to `agent`."""
+        pid = os.getpid()
+        (st.CLAUDE_SESSIONS_DIR / f"{pid}.json").write_text(json.dumps({"sessionId": "s1", "pid": pid}))
+        (st.SOCIETY_CACHE / "session-binding").mkdir(exist_ok=True)
+        (st.SOCIETY_CACHE / "session-binding" / f"{pid}.json").write_text(json.dumps({"agent": agent}))
+
+    def test_a_direct_session_follows_the_agent_it_switches_to(self):
+        # The first message ("act as searchpro") registered it as the agent bound then.
+        self.bind("jenkins")
+        tracker = {"id": "t1", "version": 0, "origin": "direct", "chatId": "c1", "agentName": "jenkins"}
+        self.responses = [(201, {"tracker": tracker, "chat_url": "https://app/chat/c1"}), (200, {"tracker": tracker})]
+        self.run_job()
+        self.assertEqual(self.runner._state["sessions"]["s1"]["agent"], "jenkins")
+
+        # The switch: the next turn registers it again as the new agent, which moves it.
+        self.bind("searchpro")
+        self.calls.clear()
+        moved = {**tracker, "agentName": "searchpro"}
+        self.responses = [(200, {"tracker": moved}), (200, {"tracker": moved})]
+        self.run_job()
+        method, path, body, agent = self.calls[0]
+        self.assertEqual((method, path, agent), ("POST", "/api/v1/session-trackers/register", "searchpro"))
+        self.assertEqual((body["origin"], body["agent_name"], body["external_session_id"]), ("direct", "searchpro", "s1"))
+        self.assertNotIn("title", body)
+        self.assertEqual(self.calls[1][3], "searchpro")  # the facts go as the new agent
+        self.assertEqual(self.runner._state["sessions"]["s1"]["agent"], "searchpro")
+
+        # Unchanged binding: no new registration.
+        self.calls.clear()
+        self.responses = [(200, {"tracker": moved})]
+        self.run_job()
+        self.assertEqual([c[1] for c in self.calls], ["/api/v1/session-trackers/t1"])
+
+    def test_a_refused_move_keeps_the_session_where_it_was(self):
+        self.bind("jenkins")
+        tracker = {"id": "t1", "version": 0, "origin": "direct", "chatId": "c1", "agentName": "jenkins"}
+        self.responses = [(201, {"tracker": tracker}), (200, {"tracker": tracker})]
+        self.run_job()
+        self.bind("searchpro")
+        self.calls.clear()
+        self.responses = [(403, {"detail": "no"}), (200, {"tracker": tracker})]
+        self.run_job()
+        self.assertEqual(self.runner._state["sessions"]["s1"]["agent"], "jenkins")
+        self.assertNotIn("s1", self.runner._refused)
+        self.assertEqual(self.calls[1][3], "jenkins")
+
     def test_a_session_the_platform_does_not_track_is_asked_again_later(self):
         self.responses = [(200, {"tracked": False, "reason": "folder_skipped", "folder": "~/client"})]
         self.run_job()

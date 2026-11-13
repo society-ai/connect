@@ -2023,8 +2023,12 @@ class Bridge:
 
     def _adopt_direct_session(self, session_id: str, params: dict) -> None:
         """Register a mirrored direct session with this bridge's shipper when the
-        tracking runner (any bridge on this machine) recorded it for this agent."""
-        if self._shipper is None or self._shipper.is_registered(session_id):
+        tracking runner (any bridge on this machine) recorded it for this agent,
+        and hand one over when it moved to another agent (the person switched
+        agents in it, D65): that agent's bridge records it from then on. The
+        recording is keyed by session, so the new bridge's first batch (from the
+        transcript's start) adds nothing twice."""
+        if self._shipper is None:
             return
         from agents.claude_code.runner import session_tracker as trk
         try:
@@ -2032,6 +2036,15 @@ class Bridge:
         except (OSError, ValueError):
             return
         st = (data.get("sessions") or {}).get(session_id) or {}
+        if self._shipper.is_registered(session_id):
+            owner = st.get("agent")
+            if (
+                st.get("mirrored") and owner and owner != self.ctx.name
+                and self._shipper.work_item_kind(session_id) == "direct"
+            ):
+                self._shipper.forget(session_id)
+                logger.info("Session %s moved to %s: no longer recorded by this bridge", session_id[:8], owner)
+            return
         if not st.get("mirrored") or st.get("agent") != self.ctx.name:
             return
         self._shipper.register(

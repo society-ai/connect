@@ -705,6 +705,38 @@ class SessionTrackerRunner:
         st["cwd"] = job.get("cwd") or tracker.get("cwd")
         return True
 
+    async def _follow_binding(self, sid: str, job: dict, st: dict) -> None:
+        """A session started in Claude Code belongs to the agent it is bound to
+        now: the person can switch ("act as X") after its first message, which
+        registered it as the agent bound then. Registering again as the new
+        agent moves its Tracker, recording and chat page there (the platform's
+        move, D65); the new agent's bridge records it from then on."""
+        live = running_session(sid)
+        bound = bound_agent((live or {}).get("pid"))
+        if not bound or bound == st.get("agent"):
+            return
+        body: dict[str, Any] = {
+            "runtime": "claude_code",
+            "external_session_id": sid,
+            "origin": "direct",
+            "agent_name": bound,
+            "host": self._host,
+            "cwd": job.get("cwd") or st.get("cwd") or None,
+            "resume_command": f"claude --resume {sid}",
+            "home": os.path.expanduser("~"),
+        }
+        status, data = await self._call(
+            bound, "POST", "/api/v1/session-trackers/register", {k: v for k, v in body.items() if v is not None},
+        )
+        tracker = (data or {}).get("tracker") or {}
+        if status not in (200, 201) or tracker.get("agentName") != bound:
+            logger.warning("Could not move session %s to %s (%s)", sid[:8], bound, status)
+            return
+        logger.info("Session %s now belongs to %s (was %s)", sid[:8], bound, st.get("agent"))
+        st["agent"] = bound
+        st["chat_id"] = tracker.get("chatId") or st.get("chat_id")
+        self._save_state()
+
     async def _process(self, sid: str, job: dict) -> None:
         """The machine's facts for one session after a prompt or turn end (§16.5).
         The summary itself comes from the server feed (_feed_loop)."""
@@ -715,6 +747,8 @@ class SessionTrackerRunner:
         st["seen"] = time.time()
         if "tracker_id" not in st or "agent" not in st:
             st["agent"] = self._origin(sid)[1]
+        elif st.get("origin") == "direct":
+            await self._follow_binding(sid, job, st)
         agent = st["agent"]
         config = await self._config_for(agent)
         if not config or not config.get("tracking"):

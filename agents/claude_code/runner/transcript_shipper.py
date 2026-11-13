@@ -358,6 +358,11 @@ class TranscriptShipper:
     def is_registered(self, session_id: str) -> bool:
         return session_id in self._state
 
+    def work_item_kind(self, session_id: str) -> Optional[str]:
+        """The kind a registered session was registered with ('direct' for one
+        the owner started in Claude Code), or None."""
+        return (self._state.get(session_id) or {}).get("work_item_kind")
+
     def expect_app_turn(self, session_id: str, text: str) -> None:
         """The owner's message from the app is about to run as a turn in this
         session (a closed session resumed for one reply): its user entry ships

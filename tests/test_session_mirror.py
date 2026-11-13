@@ -166,6 +166,22 @@ class Adopting(unittest.TestCase):
         self.assertEqual(shipper._state["s1"]["work_item_kind"], "direct")
         self.assertEqual(shipper._state["s1"]["dispatch_chat_id"], "c1")
 
+    def test_a_session_moved_to_another_agent_changes_bridges(self):
+        jenkins = self.adopt("jenkins", {"mirrored": True, "agent": "jenkins", "chat_id": "c1"})
+        self.assertTrue(jenkins.is_registered("s1"))
+        # The person switched to buzz: jenkins's bridge lets it go, buzz's takes it.
+        self.assertFalse(self.adopt("jenkins", {"mirrored": True, "agent": "buzz", "chat_id": "c1"}).is_registered("s1"))
+        self.assertTrue(self.adopt("buzz", {"mirrored": True, "agent": "buzz", "chat_id": "c1"}).is_registered("s1"))
+
+    def test_a_bridge_session_is_never_handed_over(self):
+        from core.bridge import Bridge
+        shipper = ts.TranscriptShipper("https://api.x", "sai_x", str(self.base / "jenkins"))
+        shipper.register("s1", cwd="/w", work_item_kind="chat", work_item_id="c1")
+        (self.base / "state.json").write_text(json.dumps({"sessions": {"s1": {"mirrored": True, "agent": "buzz"}}}))
+        fake = types.SimpleNamespace(_shipper=shipper, ctx=types.SimpleNamespace(name="jenkins"))
+        Bridge._adopt_direct_session(fake, "s1", {"cwd": "/w"})
+        self.assertTrue(shipper.is_registered("s1"))
+
     def test_not_for_another_agent_or_a_session_not_mirrored(self):
         self.assertFalse(self.adopt("searchpro", {"mirrored": True, "agent": "jenkins"}).is_registered("s1"))
         self.assertFalse(self.adopt("jenkins", {"mirrored": False, "agent": "jenkins"}).is_registered("s1"))
