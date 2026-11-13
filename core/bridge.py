@@ -78,6 +78,7 @@ from core import folders
 from core import removal
 from core.attachments import FILES_DIRNAME, Attachment, fetch_all, parse_file_parts, prompt_block
 from core.chat_context import chat_headers, valid_chat_id
+from core.install_identity import install_identity
 from typing import Any, Optional
 
 logging.basicConfig(
@@ -907,6 +908,9 @@ class Bridge:
             # Lets the Contacts tab show "limited on this computer". The
             # bridge enforces it whatever the platform stores.
             "contact_permission_limit": self._contact_limit(),
+            # The Connect install this bridge runs from (a hash, never the path), so the
+            # agents sharing it get one update offer.
+            **install_identity(),
         }
         framework_version = (
             await self._runner.version() if self._runner is not None else await claude_cli_version_async()
