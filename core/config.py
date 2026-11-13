@@ -34,8 +34,7 @@ SOCIETY_AI_BRIDGE_SOCKET: str = (
 # -- Session mode (v0.7 execution model) -------------------------------------
 # When enabled, the bridge dispatches work into persistent interactive Claude
 # Code sessions (one per work item, tmux + channel) instead of spawning
-# `claude -p` per message. This bills to the interactive pool (not the SDK
-# credit pool, June 15 2026), gives native multi-turn continuity, and is the
+# `claude -p` per message. This gives native multi-turn continuity and is the
 # foundation for the supervisor architecture. Default ON (matching the status
 # panel's machine defaults) — session mode is what makes transcripts mirror
 # to the platform; the spawn path never mirrors, so a fresh install that

@@ -1,11 +1,11 @@
 """SessionManager — one Claude Code session per work item.
 
 The core of the v0.7 execution model. Instead of spawning `claude -p` per
-message (SDK-credit pool, no continuity, mixed-context), the bridge launches
+message (no continuity, mixed context), the bridge launches
 a persistent *interactive* Claude Code session per work item (a task or a
 chat thread) in its own tmux window:
 
-  - interactive (not -p) → bills to the interactive pool, native compaction
+  - interactive (not -p) → native compaction
   - one session per work item → clean, isolated context; per-task transcript
   - channel-attached → the bridge pushes events in and gets replies out
   - --session-id <uuid> generated up front → resume the SAME session later

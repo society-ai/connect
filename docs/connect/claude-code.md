@@ -71,7 +71,7 @@ Re-running is safe: an existing `.env` (or `.env.<persona>`) is left alone, unle
 
 Agents of different Society AI accounts can run on the same computer: each has its own key, so
 messages, tasks and Session Trackers go to the right account. But everything on one macOS user is
-shared, whatever the account: one Claude Code login and its credits, one home folder that every
+shared, whatever the account: one Claude Code login and its plan's usage limits, one home folder that every
 agent can read, and one default agent (the one in `.env`) for the sessions you start yourself in
 Claude Code. Setup prints a note when a new agent belongs to a different account than the agents
 already here. If the agent is for another person, set it up on their own macOS user.
@@ -239,7 +239,6 @@ it instead dispatches each work item (task or chat thread) into a
 **persistent interactive Claude Code session** (one tmux session each, with
 a two-way Society AI channel attached). This:
 
-- bills to the interactive pool, not the Agent SDK credit pool (June 15 2026)
 - gives native multi-turn continuity + compaction (resume the *same* session
   for review-rework, with full task context)
 - registers each session with Remote Control so it's visible/steerable from
@@ -358,7 +357,8 @@ Code** are included, with folders to skip.
   it is running after each turn. No model runs for this.
 - **When Trackers run on Claude Code:** that bridge asks Society AI for Tracker jobs (sessions with
   a new reply), runs each with a small model (`claude -p` with Claude Haiku, no tools, no MCP, no
-  settings, nothing saved) and sends the result back. That model run uses **your Claude plan**.
+  settings, nothing saved) and sends the result back. That model run counts toward **your Claude
+  plan's usage limits**, like any other Claude Code use on this computer.
   The job's text comes from what Society AI already holds, never from this computer's transcripts.
 - Trackers are written as the hidden Tracker agent of the session's agent's account (a token of
   its own per agent, kept in `~/.cache/society-ai/tracker/identities.json`), so agents of different
@@ -400,9 +400,14 @@ channel, so a message you send from its chat page goes another way:
   folder and permission mode, and returns the answer. Never `--bg --resume`: a session that was
   ever in the background keeps its options there, and any flag then starts a copy under a new id.
 
-Both run on your **Agent SDK credits**: the relay costs a fraction of a cent, a turn in a closed
-session costs what that turn costs on the session's model. The bridge's own agent settings are
+Both count toward **your Claude plan's usage limits**: the relay uses very little, a turn in a
+closed session counts like any other turn on the session's model. The bridge's own agent settings are
 removed from that turn, so the session keeps its own identity.
+
+**Which account pays.** The Tracker runs, the relay and reopened turns are `claude -p` runs with the
+Claude Code login of this computer. Signed in with a Claude plan (Pro, Max, Team), they draw from
+that plan's usage limits, the same as any `claude -p` run. If Claude Code here uses an API key
+(`ANTHROPIC_API_KEY`) instead, they are billed to that key's Console organization.
 
 ## File access scope
 
